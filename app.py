@@ -1,9 +1,11 @@
 """
-app.py  –  MÓDULO 3 (interfaz Streamlit v2). Ejecutar con: streamlit run app.py
+app.py  –  MÓDULO 3 (interfaz Streamlit v2 + Seguridad y Multi-Distrito §12).
+Ejecutar con: streamlit run app.py
 
-Diseño v2 con cabecera superior centrada, asistente guiado paso a paso (Paso 1 a 18 + 8B),
-panel de ayuda normativa fija sincronizada, fila en vivo A-AB y planilla st.data_editor.
-Orquesta `extractor_datos.py` (I/O Excel) y `normativa_ayuda.py` (reglas y textos de ayuda).
+Diseño con cabecera superior centrada, asistente guiado paso a paso (Paso 1 a 18 + 8B),
+panel de ayuda normativa fija sincronizada, fila en vivo A-AB, planilla st.data_editor,
+autenticación de usuarios, aislamiento de bases de datos por distrito, control de operador
+único para comisiones en Zoom/Meet y panel de administración.
 """
 from __future__ import annotations
 
@@ -12,10 +14,12 @@ import inspect
 import json
 import re
 import unicodedata
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+import auth_usuarios as au
 import extractor_datos as ed
 import normativa_ayuda as na
 
@@ -30,7 +34,6 @@ st.set_page_config(
 )
 
 DISTRITO_DEFECTO = "Reg 10 Distrito: 067-MARCOS PAZ"
-ARCHIVO_SESION = ed.DIR_SALIDA / "sesion_registros.json"
 NINGUNO = "— Ninguno —"
 SI, NO = "Sí", "No"
 HOJA_MER, HOJA_NO = "MER", "NOMER"
@@ -150,8 +153,113 @@ def _ancho(funcion) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# Manejo de respuestas y Estado
+# Manejo de Respuestas, Estado y Aislamiento por Distrito (§12.2)
 # --------------------------------------------------------------------------- #
+def slug_distrito(distrito: str) -> str:
+    nombre = distrito.split("Distrito:")[-1].strip()
+    nombre = "".join(c for c in unicodedata.normalize("NFD", nombre) if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^A-Za-z0-9-]+", "_", nombre).strip("_") or "REG10"
+
+
+def archivo_distrito(distrito: str) -> Path:
+    slug = slug_distrito(distrito)
+    return ed.DIR_SALIDA / f"registros_{slug}.json"
+
+
+def _leer_disco_distrito(distrito: str) -> dict:
+    ed.DIR_SALIDA.mkdir(parents=True, exist_ok=True)
+    p = archivo_distrito(distrito)
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    # Retrocompatibilidad / Migración desde sesion_registros.json si existe
+    legado = ed.DIR_SALIDA / "sesion_registros.json"
+    if legado.exists():
+        try:
+            datos_leg = json.loads(legado.read_text(encoding="utf-8"))
+            dist_leg = datos_leg.get("config", {}).get("distrito_eval")
+            if dist_leg == distrito or not dist_leg:
+                regs = [
+                    {"id": r.get("id"), "hoja": r.get("hoja"), "datos": r.get("datos", {})}
+                    for r in datos_leg.get("registros", [])
+                ]
+                return {
+                    "version": 2,
+                    "distrito": distrito,
+                    "sig_id": datos_leg.get("sig_id", len(regs) + 1),
+                    "config": datos_leg.get("config", {}),
+                    "registros": regs,
+                }
+        except (OSError, ValueError):
+            pass
+
+    return {
+        "version": 2,
+        "distrito": distrito,
+        "sig_id": 1,
+        "config": {"incluir_residencia_ab": False},
+        "registros": [],
+    }
+
+
+def guardar_disco() -> None:
+    ss = st.session_state
+    try:
+        ed.DIR_SALIDA.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 2,
+            "distrito": ss.distrito_eval,
+            "sig_id": ss.sig_id,
+            "config": {
+                "incluir_residencia_ab": ss.incluir_residencia_ab,
+            },
+            "registros": ss.registros,
+        }
+        archivo_distrito(ss.distrito_eval).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError as exc:
+        st.toast(f"No se pudo respaldar la sesión del distrito en disco: {exc}", icon="⚠️")
+
+
+def cargar_distrito(distrito: str, usuario: dict) -> None:
+    ss = st.session_state
+    dist_anterior = ss.get("distrito_eval")
+    if dist_anterior and dist_anterior != distrito:
+        au.liberar_control_distrito(dist_anterior, usuario["username"])
+
+    ss.distrito_eval = distrito
+    data = _leer_disco_distrito(distrito)
+    ss.registros = data.get("registros", [])
+    ss.sig_id = data.get("sig_id", max([r["id"] for r in ss.registros], default=0) + 1)
+    cfg = data.get("config", {})
+    ss.incluir_residencia_ab = cfg.get("incluir_residencia_ab", False)
+    ss.ver_tabla = ss.get("ver_tabla", 0) + 1
+
+    # Control de operador único
+    op = au.obtener_operador_distrito(distrito)
+    if op is None:
+        au.tomar_control_distrito(distrito, usuario["username"], usuario["nombre"])
+        ss.es_operador = True
+    elif op.get("username") == usuario["username"]:
+        ss.es_operador = True
+    else:
+        ss.es_operador = False
+
+    recalcular_ab_todos()
+
+
+def _al_cambiar_distrito() -> None:
+    ss = st.session_state
+    nuevo_dist = ss.distrito_eval_selector
+    usr = ss.usuario_actual
+    cargar_distrito(nuevo_dist, usr)
+    resetear_aspirante()
+
+
 def nueva_resp() -> dict:
     return {
         "dni_txt": "", "apellido": "", "nombres": "",
@@ -176,55 +284,29 @@ def wk(campo: str) -> str:
     return f"w{st.session_state.ver}_{campo}"
 
 
-def _leer_disco() -> dict:
-    try:
-        return json.loads(ARCHIVO_SESION.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def guardar_disco() -> None:
+def init_estado(distritos_disponibles: list[str], usuario: dict) -> None:
     ss = st.session_state
-    try:
-        ed.DIR_SALIDA.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 2,
-            "sig_id": ss.sig_id,
-            "config": {
-                "distrito_eval": ss.distrito_eval,
-                "incluir_residencia_ab": ss.incluir_residencia_ab,
-            },
-            "registros": ss.registros,
-        }
-        ARCHIVO_SESION.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError as exc:
-        st.toast(f"No se pudo respaldar la sesión en disco: {exc}", icon="⚠️")
+    if "paso_actual" not in ss:
+        ss.paso_actual = 1
+        ss.resp = nueva_resp()
+        ss.ver = 1
+        ss.ver_tabla = 1
+        ss.es_otro_curso = False
+        ss.saltar_precargados = True
+        ss.flash = None
 
-
-def init_estado() -> None:
-    ss = st.session_state
-    if "registros" in ss:
-        return
-    disco = _leer_disco()
-    raw_regs = disco.get("registros", [])
-    # Sanitizar versión previa de registros si venían con 'inputs'
-    regs_limpios = []
-    for r in raw_regs:
-        item = {"id": r.get("id"), "hoja": r.get("hoja"), "datos": r.get("datos", {})}
-        regs_limpios.append(item)
-    ss.registros = regs_limpios
-    ss.sig_id = disco.get("sig_id", max([r["id"] for r in ss.registros], default=0) + 1)
-    cfg = disco.get("config", {})
-    ss.distrito_eval = cfg.get("distrito_eval", DISTRITO_DEFECTO)
-    ss.incluir_residencia_ab = cfg.get("incluir_residencia_ab", False)
-
-    ss.paso_actual = 1
-    ss.resp = nueva_resp()
-    ss.ver = 1
-    ss.ver_tabla = 1
-    ss.es_otro_curso = False
-    ss.saltar_precargados = True
-    ss.flash = None
+    if "distrito_eval" not in ss or ss.distrito_eval not in distritos_disponibles:
+        cargar_distrito(distritos_disponibles[0], usuario)
+    else:
+        # Revalidar estado de operador por si otro usuario relevó
+        op = au.obtener_operador_distrito(ss.distrito_eval)
+        if op is None:
+            au.tomar_control_distrito(ss.distrito_eval, usuario["username"], usuario["nombre"])
+            ss.es_operador = True
+        elif op.get("username") == usuario["username"]:
+            ss.es_operador = True
+        else:
+            ss.es_operador = False
 
 
 def sanear_resp() -> None:
@@ -241,7 +323,7 @@ def sanear_resp() -> None:
 
 def recalcular_ab_todos() -> None:
     ss = st.session_state
-    for r in ss.registros:
+    for r in ss.get("registros", []):
         if r["hoja"] == HOJA_MER:
             res = na.calcular_ab(r["datos"], ss.distrito_eval, ss.incluir_residencia_ab)
             r["datos"]["puntaje"] = res["ab"]
@@ -277,12 +359,6 @@ def buscar_dni_en_planilla(dni: int, mtime: float) -> list[dict]:
 @st.cache_data(show_spinner="Generando el Excel oficial…")
 def generar_excel(mer_json: str, no_json: str, distrito: str, mtime: float) -> bytes:
     return ed.exportar_excel_bytes(json.loads(mer_json), json.loads(no_json), distrito)
-
-
-def slug_distrito(distrito: str) -> str:
-    nombre = distrito.split("Distrito:")[-1].strip()
-    nombre = "".join(c for c in unicodedata.normalize("NFD", nombre) if unicodedata.category(c) != "Mn")
-    return re.sub(r"[^A-Za-z0-9-]+", "_", nombre).strip("_") or "REG10"
 
 
 def fmt(valor) -> str:
@@ -327,7 +403,7 @@ def duplicados(dni: int | None, curso: str | None) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Construcción unificada de datos para preview y guardado
+# Construcción unificada de datos y Resumen de Lectura Zoom/Meet (§12.6)
 # --------------------------------------------------------------------------- #
 def construir_datos(resp: dict, distrito_eval: str, incluir: bool) -> tuple[str, dict]:
     limpio = re.sub(r"\D", "", resp.get("dni_txt") or "")
@@ -420,11 +496,317 @@ def construir_datos(resp: dict, distrito_eval: str, incluir: bool) -> tuple[str,
     return hoja, datos
 
 
+def texto_lectura_comision(hoja: str, datos: dict) -> str:
+    """Devuelve un texto estructurado en prosa limpia para leer en voz alta
+    a los demás integrantes de la comisión evaluadora en Zoom/Meet (§12.6)."""
+    ap = datos.get("apellido", "")
+    nom = datos.get("nombres", "")
+    dni = datos.get("dni", "—")
+    esp = datos.get("especialidad", "—")
+
+    lineas = [
+        "🗣️ RESUMEN DE LECTURA PARA LA COMISIÓN (Dictamen en voz alta):",
+        "--------------------------------------------------------------------------------",
+        f"• Aspirante: {ap}, {nom}  |  DNI: {dni}",
+        f"• Especialidad / Curso: {esp}",
+    ]
+    if hoja == HOJA_NO:
+        motivo = datos.get("motivo", "No reúne requisitos")
+        obs = datos.get("observaciones") or "Sin observaciones adicionales."
+        lineas.extend([
+            "• Dictamen: NO MERITÚA (pasa a hoja NO MERITUADOS)",
+            f"• Motivo de exclusión (Col. J): {motivo}",
+            f"• Observaciones de la Comisión (Col. K): {obs}",
+            "--------------------------------------------------------------------------------",
+            ">>> DICTAMEN: NO MERITÚA",
+        ])
+        return "\n".join(lineas)
+
+    # MERITUADOS
+    d1 = datos.get("dist1") or "—"
+    p_d1 = f"{datos.get('pts_dist1')} pts (Coincide con DNI)" if datos.get("pts_dist1") == 5 else "0 pts"
+    d2 = datos.get("dist2") or "No solicita"
+    p_d2 = f"{datos.get('pts_dist2')} pts (Coincide con DNI)" if datos.get("pts_dist2") == 5 else "0 pts"
+    d3 = datos.get("dist3") or "No solicita"
+    p_d3 = f"{datos.get('pts_dist3')} pts (Coincide con DNI)" if datos.get("pts_dist3") == 5 else "0 pts"
+
+    fi = datos.get("fi", 0)
+    listado = datos.get("listado") or ("PRINCIPAL" if fi == 25 else "COMPLEMENTARIO")
+    fi_txt = f"Posee FI (25 pts -> Listado {listado})" if fi == 25 else f"No posee FI (0 pts -> Listado {listado})"
+
+    fe_pts = 0
+    fe_col = "—"
+    fe_nom = "Ninguno / Sin orientación afín"
+    for col, clave, nom_t in [
+        ("N", "fe_sec_orient", "Secundario orientado afín (3 pts)"),
+        ("O", "fe_sec_tecnico", "Secundario técnico afín (5 pts)"),
+        ("P", "fe_superior", "Superior afín (7 pts)"),
+        ("Q", "fe_universitario", "Universitario de grado afín (8 pts)"),
+    ]:
+        if (datos.get(clave) or 0) > 0:
+            fe_pts = datos.get(clave)
+            fe_col = col
+            fe_nom = nom_t
+            break
+
+    v_pts = datos.get("form_sup_fp") or 0
+    v_txt = "Acredita 7 pts (Tecnicatura ETP/Superior en FP)" if v_pts == 7 else "0 pts"
+
+    r_pts = datos.get("cap_docente") or 0.0
+    s_pts = datos.get("cap_especifica") or 0.0
+
+    t_anios = datos.get("desemp_anios") or 0
+    u_pts = datos.get("desemp_pts") or 0
+
+    w_pts = datos.get("antig_docencia") or 0.0
+    x_pts = datos.get("antig_fp") or 0.0
+
+    y_pts = datos.get("calif1") or 0.0
+    z_pts = datos.get("calif2") or 0.0
+
+    aa_pts = datos.get("art59") or 0
+    aa_txt = "10 pts (Sin cargos ni horas titulares)" if aa_pts == 10 else "0 pts (Posee cargos titulares)"
+
+    calc = na.calcular_puntaje(datos)
+    base = calc["base"]
+    con_res = calc["con_residencia"]
+    ab = datos.get("puntaje", base)
+
+    lineas.extend([
+        f"• Dictamen: MERITÚA (Listado {listado})",
+        "• Distritos Solicitados y Residencia:",
+        f"  - Distrito 1 (Col. G y H): {d1} -> {p_d1}",
+        f"  - Distrito 2 (Col. I y J): {d2} -> {p_d2}",
+        f"  - Distrito 3 (Col. K y L): {d3} -> {p_d3}",
+        "• Formación y Títulos:",
+        f"  - Certificado FI (Col. M y B): {fi_txt}",
+        f"  - Formación Específica (Cols. N-Q): Col. {fe_col} = {fe_pts} pts ({fe_nom})",
+        f"  - Formación Superior en FP (Col. V): {v_txt}",
+        "• Capacitaciones Acreditadas:",
+        f"  - Capacitación Docente (Col. R): {r_pts:.2f} pts (tope 3.00)",
+        f"  - Capacitación Específica (Col. S): {s_pts:.2f} pts (tope 5.00)",
+        "• Trayectoria, Antigüedad y Calificaciones:",
+        f"  - Desempeño Profesional (Cols. T y U): {t_anios} años acreditados -> {u_pts} pts",
+        f"  - Antigüedad Docencia Oficial (Col. W): {w_pts:.2f} pts (tope 2.50)",
+        f"  - Antigüedad Ámbito FP Oficial (Col. X): {x_pts:.2f} pts (tope 5.00)",
+        f"  - Calificaciones SET 4 (Cols. Y y Z): Año 1 = {y_pts:.2f} pts | Año 2 = {z_pts:.2f} pts",
+        f"  - Art. 59 Estatuto Docente (Col. AA): {aa_txt}",
+        "--------------------------------------------------------------------------------",
+        f">>> PUNTAJE BASE: {base:.2f} pts",
+        f">>> PUNTAJE CON RESIDENCIA (+5): {con_res:.2f} pts",
+        f">>> PUNTAJE FINAL COLUMNA AB A GUARDAR: {ab:.2f} pts",
+    ])
+    return "\n".join(lineas)
+
+
 # --------------------------------------------------------------------------- #
-# Top Bar (Cabecera Superior Centrada)
+# Pantalla de Login y Panel de Administración (§12.4 y §12.5)
 # --------------------------------------------------------------------------- #
-def top_bar(distritos: list[str]) -> None:
+def pantalla_login() -> None:
+    st.markdown(
+        "<div style='text-align: center; margin-top: 2rem; margin-bottom: 2rem;'>"
+        "<h1>📋 Evaluador de Formación Profesional · Región 10</h1>"
+        "<p style='color: gray; font-size: 1.1rem;'>Acceso seguro a la Comisión Evaluadora de Títulos y Antecedentes (Listados 2027)</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    _, col_centro, _ = st.columns([1, 1.2, 1])
+    with col_centro:
+        with st.container(border=True):
+            st.markdown("### 🔐 Iniciar Sesión")
+            usr_input = st.text_input("Usuario", key="login_usr", placeholder="Ingrese su usuario")
+            pwd_input = st.text_input("Contraseña", type="password", key="login_pwd", placeholder="••••••••")
+            if st.button("Ingresar al Sistema", type="primary", **_ancho(st.button)):
+                usr = au.verificar_credenciales(usr_input, pwd_input)
+                if usr:
+                    st.session_state.usuario_actual = usr
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos. Verifique sus credenciales.")
+            st.caption("Acceso inicial de administrador: usuario `admin`.")
+
+
+def panel_administracion(distritos_todos: list[str]) -> None:
+    with st.expander("⚙️ Panel de Administración de Usuarios y Comisiones", expanded=False):
+        tab_usrs, tab_bloq, tab_pass = st.tabs([
+            "👥 Gestión de Usuarios",
+            "🔒 Monitoreo de Distritos en Vivo",
+            "🔑 Mi Contraseña",
+        ])
+        with tab_usrs:
+            usuarios = au.listar_usuarios()
+            c_izq, c_der = st.columns([1.2, 2])
+            with c_izq:
+                st.markdown("##### Crear / Modificar Usuario")
+                u_sel = st.selectbox(
+                    "Seleccionar usuario a editar (o crear nuevo):",
+                    ["[Crear Nuevo Usuario]"] + list(usuarios.keys()),
+                    key="admin_sel_usuario",
+                )
+                es_nuevo = u_sel == "[Crear Nuevo Usuario]"
+                datos_usr = usuarios.get(u_sel, {}) if not es_nuevo else {}
+
+                u_username = st.text_input(
+                    "Nombre de usuario (login) *",
+                    value=datos_usr.get("username", "") if not es_nuevo else "",
+                    disabled=not es_nuevo,
+                    key="admin_u_user",
+                )
+                u_nombre = st.text_input("Nombre visible / Comisión *", value=datos_usr.get("nombre", ""), key="admin_u_nombre")
+                u_pwd = st.text_input(
+                    "Contraseña" + (" (dejar vacío para no cambiar)" if not es_nuevo else " *"),
+                    type="password",
+                    key="admin_u_pwd",
+                )
+                u_rol = st.selectbox(
+                    "Rol",
+                    ["evaluador", "admin"],
+                    index=0 if datos_usr.get("rol") != "admin" else 1,
+                    disabled=(u_sel == "admin"),
+                    key="admin_u_rol",
+                )
+
+                st.markdown("**Distritos habilitados:**")
+                if u_rol == "admin":
+                    st.info("El rol Administrador tiene acceso a TODOS los distritos.")
+                    d_permitidos = ["TODOS"]
+                else:
+                    dist_def = datos_usr.get("distritos_permitidos", [])
+                    d_permitidos = st.multiselect(
+                        "Distritos asignados:",
+                        options=distritos_todos,
+                        default=[d for d in dist_def if d in distritos_todos],
+                        key=f"admin_u_dist_{u_sel}",
+                    )
+
+                if st.button("💾 Guardar Usuario", type="primary", key="btn_save_user", **_ancho(st.button)):
+                    ok, msg = au.crear_o_actualizar_usuario(
+                        u_username,
+                        u_pwd,
+                        u_nombre,
+                        u_rol,
+                        d_permitidos,
+                    )
+                    if ok:
+                        st.success(msg)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+            with c_der:
+                st.markdown("##### Usuarios Registrados")
+                filas_u = []
+                for uname, uinfo in usuarios.items():
+                    d_txt = (
+                        "TODOS"
+                        if uinfo.get("rol") == "admin" or "TODOS" in uinfo.get("distritos_permitidos", [])
+                        else f"{len(uinfo.get('distritos_permitidos', []))} asignados"
+                    )
+                    filas_u.append({
+                        "Usuario": uname,
+                        "Nombre": uinfo.get("nombre"),
+                        "Rol": uinfo.get("rol"),
+                        "Distritos": d_txt,
+                        "Creado": uinfo.get("creado", "—"),
+                    })
+                st.dataframe(pd.DataFrame(filas_u), hide_index=True, **_ancho(st.dataframe))
+
+                st.divider()
+                st.markdown("##### Eliminar Usuario")
+                u_borrar = st.selectbox("Usuario a eliminar:", [u for u in usuarios.keys() if u != "admin"], key="sel_borrar_usr")
+                if u_borrar:
+                    with st.popover(f"🗑️ Eliminar a '{u_borrar}'"):
+                        st.warning(f"¿Confirma eliminar definitivamente al usuario '{u_borrar}'?")
+                        if st.button("Sí, eliminar usuario", type="primary", key="btn_conf_del_usr"):
+                            ok, msg = au.eliminar_usuario(u_borrar)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+
+        with tab_bloq:
+            st.markdown("##### Distritos con Operadores Activos en este Momento")
+            bloqueos = au.listar_bloqueos()
+            if not bloqueos:
+                st.info("No hay distritos ocupados en este momento.")
+            else:
+                filas_b = []
+                for dist, b_info in bloqueos.items():
+                    filas_b.append({
+                        "Distrito": dist,
+                        "Operador": b_info.get("username"),
+                        "Nombre": b_info.get("nombre"),
+                        "Desde": b_info.get("timestamp"),
+                    })
+                st.dataframe(pd.DataFrame(filas_b), hide_index=True, **_ancho(st.dataframe))
+
+                st.markdown("##### Liberar Forzadamente un Distrito")
+                dist_lib = st.selectbox("Seleccione distrito a liberar:", list(bloqueos.keys()), key="sel_lib_dist")
+                if st.button("🔓 Forzar liberación de distrito", key="btn_forzar_lib"):
+                    au.forzar_liberacion_distrito(dist_lib)
+                    st.success(f"Distrito '{dist_lib}' liberado correctamente.")
+                    st.rerun()
+
+        with tab_pass:
+            st.markdown("##### Cambiar mi contraseña de Administrador")
+            actual_usr = st.session_state.usuario_actual
+            nueva_p1 = st.text_input("Nueva contraseña:", type="password", key="admin_new_p1")
+            nueva_p2 = st.text_input("Confirmar nueva contraseña:", type="password", key="admin_new_p2")
+            if st.button("Actualizar contraseña", type="primary", key="btn_upd_admin_pass"):
+                if not nueva_p1:
+                    st.error("Ingrese una contraseña no vacía.")
+                elif nueva_p1 != nueva_p2:
+                    st.error("Las contraseñas no coinciden.")
+                else:
+                    ok, msg = au.crear_o_actualizar_usuario(
+                        actual_usr["username"],
+                        nueva_p1,
+                        actual_usr["nombre"],
+                        actual_usr["rol"],
+                        actual_usr["distritos_permitidos"],
+                    )
+                    if ok:
+                        st.success("Contraseña actualizada con éxito.")
+                    else:
+                        st.error(msg)
+
+
+# --------------------------------------------------------------------------- #
+# Top Bar (Cabecera Superior con Roles y Estado §12.3)
+# --------------------------------------------------------------------------- #
+def top_bar(distritos_disponibles: list[str], distritos_todos: list[str]) -> None:
     ss = st.session_state
+    usr = ss.usuario_actual
+
+    # Fila de usuario y estado de operador
+    u_col1, u_col2, u_col3 = st.columns([3, 4, 1.2], vertical_alignment="center")
+    with u_col1:
+        st.markdown(f"👤 Conectado: **{usr['nombre']}** `[{usr['rol'].upper()}]`")
+    with u_col2:
+        if ss.es_operador:
+            st.markdown("<span style='color: #2b8a3e; font-weight: bold;'>🟢 Operador Activo (Edición habilitada)</span>", unsafe_allow_html=True)
+        else:
+            op = au.obtener_operador_distrito(ss.distrito_eval) or {}
+            c_op, c_btn = st.columns([3, 2])
+            c_op.markdown(
+                f"<span style='color: #d9480f; font-weight: bold;'>👁️ Modo Observador (Operando: {op.get('nombre', 'Otro')})</span>",
+                unsafe_allow_html=True,
+            )
+            if c_btn.button("🤝 Tomar el control de carga", key="btn_tomar_control", help="Relevar al operador actual de este distrito"):
+                au.tomar_control_distrito(ss.distrito_eval, usr["username"], usr["nombre"])
+                ss.es_operador = True
+                st.rerun()
+    with u_col3:
+        if st.button("🚪 Cerrar Sesión", key="btn_logout", **_ancho(st.button)):
+            au.liberar_control_distrito(ss.distrito_eval, usr["username"])
+            ss.usuario_actual = None
+            st.rerun()
+
+    # Panel de administración si es admin
+    if usr.get("rol") == "admin":
+        panel_administracion(distritos_todos)
+
     st.markdown(
         "<div style='text-align: center; margin-bottom: 0.5rem;'>"
         "<h2 style='margin-bottom:0;'>📋 Evaluador de Formación Profesional · Región 10</h2>"
@@ -436,13 +818,13 @@ def top_bar(distritos: list[str]) -> None:
     _, c1, c2, c3, c4, _ = st.columns([0.2, 2.5, 2.7, 2.6, 0.6, 0.2], vertical_alignment="center")
 
     with c1:
-        idx_dist = distritos.index(ss.distrito_eval) if ss.distrito_eval in distritos else 0
+        idx_dist = distritos_disponibles.index(ss.distrito_eval) if ss.distrito_eval in distritos_disponibles else 0
         st.selectbox(
             "Distrito Evaluador (celda D1)",
-            distritos,
+            distritos_disponibles,
             index=idx_dist,
-            key="distrito_eval",
-            on_change=_al_cambiar_config,
+            key="distrito_eval_selector",
+            on_change=_al_cambiar_distrito,
         )
 
     with c2:
@@ -466,6 +848,7 @@ def top_bar(distritos: list[str]) -> None:
             "Incluir +5 pts de residencia del Distrito Evaluador en Columna AB",
             key="incluir_residencia_ab",
             on_change=_al_cambiar_config,
+            disabled=not ss.es_operador,
             help="Si está activo, suma 5 pts en Col. AB solo si el aspirante acredita residencia en el Distrito Evaluador actual.",
         )
 
@@ -477,7 +860,7 @@ def top_bar(distritos: list[str]) -> None:
                 st.rerun()
             st.divider()
             st.markdown("⚠️ **Zona de riesgo:**")
-            if st.button("🗑️ Vaciar toda la sesión", type="primary", **_ancho(st.button)):
+            if st.button("🗑️ Vaciar este distrito", type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
                 ss.registros = []
                 ss.sig_id = 1
                 ss.ver_tabla += 1
@@ -491,8 +874,9 @@ def top_bar(distritos: list[str]) -> None:
     legajos_no = len({r["datos"]["dni"] for r in _registros(HOJA_NO) if r["datos"].get("dni")})
     st.markdown(
         f"<div style='text-align: center; color: #666; font-size: 0.88rem; margin-bottom: 0.8rem;'>"
-        f"<b>MERITUADOS:</b> {n_mer} cursos ({legajos_mer} legajos) &nbsp;·&nbsp; "
-        f"<b>NO MERITUADOS:</b> {n_no} cursos ({legajos_no} legajos)"
+        f"<b>Distrito Activo ({ss.distrito_eval}):</b> "
+        f"MERITUADOS: {n_mer} cursos ({legajos_mer} legajos) &nbsp;·&nbsp; "
+        f"NO MERITUADOS: {n_no} cursos ({legajos_no} legajos)"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -596,9 +980,6 @@ def validar_todo(resp: dict) -> list[str]:
     return todos
 
 
-PASOS_PRECARGADOS_SALTAR = {9, 14, 15, 16, 17}
-
-
 def siguiente_paso_idx(p_actual: int, ruta: list[int], saltar_precargados: bool, es_otro_curso: bool) -> int:
     idx = ruta.index(p_actual)
     for sig in ruta[idx + 1:]:
@@ -634,7 +1015,6 @@ def _agregar_cert(p: str) -> None:
     unidad = ss.get(u_key, CAL_RELOJ)
     desc = (ss.get(desc_key) or "").strip()
     resp[f"cert_{p}"].append({"desc": desc, "horas": int(horas), "unidad": unidad})
-    # Reset widget state
     ss[h_key] = 0
     ss[desc_key] = ""
 
@@ -648,8 +1028,8 @@ def _quitar_cert(p: str, i: int) -> None:
 def calculadora_paso(p: str, titulo: str, tipo: str, tope: float, puntos_fn) -> float:
     ss = st.session_state
     resp = ss.resp
+    deshab = not ss.es_operador
 
-    # Si mantiene valoración anterior, se fuerza "Puntaje directo"
     es_recurrente = resp.get("mantiene") == "Sí"
     if es_recurrente:
         resp[f"modo_{p}"] = "Puntaje directo"
@@ -661,7 +1041,7 @@ def calculadora_paso(p: str, titulo: str, tipo: str, tope: float, puntos_fn) -> 
         index=0 if resp[f"modo_{p}"] == "Certificados" else 1,
         horizontal=True,
         key=wk(f"modo_radio_{p}"),
-        disabled=es_recurrente,
+        disabled=es_recurrente or deshab,
     )
     resp[f"modo_{p}"] = modo
 
@@ -673,16 +1053,16 @@ def calculadora_paso(p: str, titulo: str, tipo: str, tope: float, puntos_fn) -> 
             step=0.05,
             value=float(resp.get(f"dir_{p}", 0.0) or 0.0),
             key=wk(f"dir_input_{p}"),
+            disabled=deshab,
         )
         resp[f"dir_{p}"] = round(float(val), 2)
         return resp[f"dir_{p}"]
 
-    # Modo Certificados
     ca, cb, cc, cd = st.columns([3, 1.2, 2.2, 1.4], vertical_alignment="bottom")
-    ca.text_input("Descripción del certificado (opcional)", key=wk(f"desc_{p}"))
-    cb.number_input("Horas", min_value=0, max_value=3000, step=1, key=wk(f"h_{p}"))
-    cc.radio("Unidad", [CAL_RELOJ, CAL_CATEDRA], horizontal=True, key=wk(f"u_{p}"))
-    cd.button("➕ Agregar", key=wk(f"btn_add_{p}"), on_click=_agregar_cert, args=(p,), **_ancho(st.button))
+    ca.text_input("Descripción del certificado (opcional)", key=wk(f"desc_{p}"), disabled=deshab)
+    cb.number_input("Horas", min_value=0, max_value=3000, step=1, key=wk(f"h_{p}"), disabled=deshab)
+    cc.radio("Unidad", [CAL_RELOJ, CAL_CATEDRA], horizontal=True, key=wk(f"u_{p}"), disabled=deshab)
+    cd.button("➕ Agregar", key=wk(f"btn_add_{p}"), on_click=_agregar_cert, args=(p,), disabled=deshab, **_ancho(st.button))
 
     certs = resp.get(f"cert_{p}", [])
     hs_reloj = []
@@ -701,6 +1081,7 @@ def calculadora_paso(p: str, titulo: str, tipo: str, tope: float, puntos_fn) -> 
             key=wk(f"del_{p}_{i}"),
             on_click=_quitar_cert,
             args=(p, i),
+            disabled=deshab,
             help="Quitar certificado",
         )
 
@@ -725,9 +1106,11 @@ def render_paso_1(distritos, cursos):
         value=resp["dni_txt"],
         key=wk("dni_txt"),
         placeholder="Ej: 26943922",
+        disabled=not ss.es_operador,
         help="Número sin puntos ni espacios.",
     )
-    resp["dni_txt"] = dni_val
+    if ss.es_operador:
+        resp["dni_txt"] = dni_val
 
 
 def render_paso_2(distritos, cursos):
@@ -739,8 +1122,10 @@ def render_paso_2(distritos, cursos):
         value=resp["apellido"],
         key=wk("apellido"),
         placeholder="Ej: SABORIDO",
+        disabled=not ss.es_operador,
     )
-    resp["apellido"] = " ".join(ap_val.upper().split())
+    if ss.es_operador:
+        resp["apellido"] = " ".join(ap_val.upper().split())
 
 
 def render_paso_3(distritos, cursos):
@@ -752,8 +1137,10 @@ def render_paso_3(distritos, cursos):
         value=resp["nombres"],
         key=wk("nombres"),
         placeholder="Ej: LORENA LILIANA",
+        disabled=not ss.es_operador,
     )
-    resp["nombres"] = " ".join(nom_val.upper().split())
+    if ss.es_operador:
+        resp["nombres"] = " ".join(nom_val.upper().split())
 
 
 def render_paso_4(distritos, cursos):
@@ -767,15 +1154,18 @@ def render_paso_4(distritos, cursos):
         index=idx,
         placeholder="Escriba o elija el Distrito 1...",
         key=wk("d1"),
+        disabled=not ss.es_operador,
     )
-    resp["d1"] = d1
     r1 = st.checkbox(
         "Coincide con el domicilio del DNI vigente → 5 pts en Col. H",
         value=resp["r1"],
         key=wk("r1"),
+        disabled=not ss.es_operador,
     )
-    resp["r1"] = r1
-    pts = na.puntos_residencia(r1) if d1 else None
+    if ss.es_operador:
+        resp["d1"] = d1
+        resp["r1"] = r1
+    pts = na.puntos_residencia(resp["r1"]) if resp["d1"] else None
     st.caption(f"Col. H (Puntaje de Residencia) = **{'—' if pts is None else pts}** pts")
 
 
@@ -785,20 +1175,23 @@ def render_paso_5(distritos, cursos):
     st.markdown("#### Columnas I y J: Distrito 2 (Opcional) y Residencia")
     lista_d2 = [NINGUNO] + distritos
     idx = lista_d2.index(resp["d2"]) if resp["d2"] in lista_d2 else 0
-    d2_sel = st.selectbox("Distrito 2 (Col. I) – opcional", lista_d2, index=idx, key=wk("d2"))
+    d2_sel = st.selectbox("Distrito 2 (Col. I) – opcional", lista_d2, index=idx, key=wk("d2"), disabled=not ss.es_operador)
     if d2_sel == NINGUNO:
-        resp["d2"] = None
-        resp["r2"] = False
+        if ss.es_operador:
+            resp["d2"] = None
+            resp["r2"] = False
         st.caption("Distrito 2 deshabilitado.")
     else:
-        resp["d2"] = d2_sel
         r2 = st.checkbox(
             "Coincide con el domicilio del DNI vigente → 5 pts en Col. J",
             value=resp["r2"],
             key=wk("r2"),
+            disabled=not ss.es_operador,
         )
-        resp["r2"] = r2
-        pts = na.puntos_residencia(r2)
+        if ss.es_operador:
+            resp["d2"] = d2_sel
+            resp["r2"] = r2
+        pts = na.puntos_residencia(resp["r2"])
         st.caption(f"Col. J (Puntaje de Residencia) = **{pts}** pts")
 
 
@@ -808,20 +1201,23 @@ def render_paso_6(distritos, cursos):
     st.markdown("#### Columnas K y L: Distrito 3 (Opcional) y Residencia")
     lista_d3 = [NINGUNO] + distritos
     idx = lista_d3.index(resp["d3"]) if resp["d3"] in lista_d3 else 0
-    d3_sel = st.selectbox("Distrito 3 (Col. K) – opcional", lista_d3, index=idx, key=wk("d3"))
+    d3_sel = st.selectbox("Distrito 3 (Col. K) – opcional", lista_d3, index=idx, key=wk("d3"), disabled=not ss.es_operador)
     if d3_sel == NINGUNO:
-        resp["d3"] = None
-        resp["r3"] = False
+        if ss.es_operador:
+            resp["d3"] = None
+            resp["r3"] = False
         st.caption("Distrito 3 deshabilitado.")
     else:
-        resp["d3"] = d3_sel
         r3 = st.checkbox(
             "Coincide con el domicilio del DNI vigente → 5 pts en Col. L",
             value=resp["r3"],
             key=wk("r3"),
+            disabled=not ss.es_operador,
         )
-        resp["r3"] = r3
-        pts = na.puntos_residencia(r3)
+        if ss.es_operador:
+            resp["d3"] = d3_sel
+            resp["r3"] = r3
+        pts = na.puntos_residencia(resp["r3"])
         st.caption(f"Col. L (Puntaje de Residencia) = **{pts}** pts")
 
 
@@ -836,13 +1232,16 @@ def render_paso_7(distritos, cursos):
         index=idx,
         placeholder="Escriba el nombre o código del curso...",
         key=wk("curso"),
+        disabled=not ss.es_operador,
     )
-    resp["curso"] = curso
-    if curso:
-        perfil = na.texto_perfil_nuevo_diseno(curso)
+    if ss.es_operador:
+        resp["curso"] = curso
+    if resp["curso"]:
+        c = resp["curso"]
+        perfil = na.texto_perfil_nuevo_diseno(c)
         if perfil:
             st.info("🔷 " + perfil)
-        tipo = na.tipo_cargo(curso)
+        tipo = na.tipo_cargo(c)
         if tipo == "panolero":
             st.warning("**Pañol (00PA):** solo valen títulos TÉCNICOS. El secundario común no otorga puntaje.")
         elif tipo == "preceptor":
@@ -850,13 +1249,14 @@ def render_paso_7(distritos, cursos):
 
         limpio = re.sub(r"\D", "", resp.get("dni_txt") or "")
         dni = int(limpio) if limpio else None
-        dups = duplicados(dni, curso)
+        dups = duplicados(dni, c)
         if dups:
             st.warning("⚠️ Ya existe una carga de este aspirante para este curso:\n- " + "\n- ".join(dups))
             resp["confirm_dup"] = st.checkbox(
                 "Confirmo que deseo cargarlo de todos modos",
                 value=resp["confirm_dup"],
                 key=wk("confirm_dup"),
+                disabled=not ss.es_operador,
             )
 
 
@@ -873,16 +1273,21 @@ def render_paso_8(distritos, cursos):
         opciones_hab,
         index=idx,
         key=wk(f"hab_{tipo}"),
+        disabled=not ss.es_operador,
     )
-    resp["hab"] = hab
+    if ss.es_operador:
+        resp["hab"] = hab
 
-    if hab and hab != NO_MERITUA:
-        resp["req_comunes"] = st.checkbox(
+    if resp["hab"] and resp["hab"] != NO_MERITUA:
+        rc = st.checkbox(
             "Confirmo Requisitos Comunes (Inc. 3): Anexo III oficial, DNI frente/reverso y Título registrado.",
             value=resp["req_comunes"],
             key=wk("req_comunes"),
+            disabled=not ss.es_operador,
         )
-        if "Recurrente" in hab:
+        if ss.es_operador:
+            resp["req_comunes"] = rc
+        if "Recurrente" in resp["hab"]:
             st.markdown("**Inscripción Recurrente:**")
             idx_m = [SI, NO].index(resp["mantiene"]) if resp["mantiene"] in [SI, NO] else None
             mantiene = st.radio(
@@ -891,8 +1296,10 @@ def render_paso_8(distritos, cursos):
                 index=idx_m,
                 horizontal=True,
                 key=wk("mantiene_rad"),
+                disabled=not ss.es_operador,
             )
-            resp["mantiene"] = mantiene
+            if ss.es_operador:
+                resp["mantiene"] = mantiene
 
 
 def render_paso_19(distritos, cursos):
@@ -900,14 +1307,30 @@ def render_paso_19(distritos, cursos):
     resp = ss.resp
     st.markdown("#### NO MERITÚA – Motivo y Observaciones (Cols. J y K)")
     idx = na.MOTIVOS_NO_MERITUADO.index(resp["motivo"]) if resp["motivo"] in na.MOTIVOS_NO_MERITUADO else 0
-    resp["motivo"] = st.selectbox("Motivo (Col. J) *", na.MOTIVOS_NO_MERITUADO, index=idx, key=wk("motivo"))
-    resp["obs"] = st.text_area(
+    mot = st.selectbox("Motivo (Col. J) *", na.MOTIVOS_NO_MERITUADO, index=idx, key=wk("motivo"), disabled=not ss.es_operador)
+    obs = st.text_area(
         "Observaciones de la Comisión Evaluadora (Col. K)",
         value=resp["obs"],
         key=wk("obs"),
         height=100,
+        disabled=not ss.es_operador,
     )
+    if ss.es_operador:
+        resp["motivo"] = mot
+        resp["obs"] = obs
+
     st.info("Al guardar, este aspirante pasará a la planilla de **NO MERITUADOS**.")
+
+    # Resumen Zoom/Meet
+    hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
+    st.markdown("##### 🗣️ Resumen de Lectura para la Comisión (Zoom/Meet)")
+    st.text_area(
+        "Dictamen en voz alta:",
+        value=texto_lectura_comision(hoja, datos),
+        height=180,
+        key="txt_lectura_zoom_p19",
+        disabled=True,
+    )
 
     errs = validar_todo(resp)
     for e in errs:
@@ -915,20 +1338,18 @@ def render_paso_19(distritos, cursos):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("💾 Guardar en NO MERITUADOS y evaluar OTRO curso del MISMO aspirante", **_ancho(st.button)):
+        if st.button("💾 Guardar en NO MERITUADOS y evaluar OTRO curso del MISMO aspirante", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los errores antes de guardar.")
             else:
-                hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
                 guardar(hoja, datos)
                 resetear_curso()
                 st.rerun()
     with c2:
-        if st.button("✅ Guardar en NO MERITUADOS y cargar NUEVO aspirante", type="primary", **_ancho(st.button)):
+        if st.button("✅ Guardar en NO MERITUADOS y cargar NUEVO aspirante", type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los errores antes de guardar.")
             else:
-                hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
                 guardar(hoja, datos)
                 resetear_aspirante()
                 st.rerun()
@@ -948,10 +1369,12 @@ def render_paso_9(distritos, cursos):
         index=idx,
         horizontal=True,
         key=wk("fi"),
+        disabled=not ss.es_operador,
         format_func=lambda x: "Sí (25 pts → Listado PRINCIPAL)" if x == SI else "No (0 pts → Listado COMPLEMENTARIO)",
     )
-    if fi_sel is not None:
+    if ss.es_operador and fi_sel is not None:
         resp["fi"] = na.PTS_FI if fi_sel == SI else 0
+    if resp["fi"] is not None:
         st.caption(f"Col. M = **{resp['fi']}** pts · Col. B (LISTADO) = **{na.calcular_listado(resp['fi'])}**")
 
 
@@ -967,9 +1390,11 @@ def render_paso_10(distritos, cursos):
         opciones_fe,
         index=idx,
         key=wk("fe_sel"),
+        disabled=not ss.es_operador,
         format_func=etiqueta_formacion,
     )
-    resp["fe_sel"] = fe_sel
+    if ss.es_operador:
+        resp["fe_sel"] = fe_sel
 
 
 def render_paso_11(distritos, cursos):
@@ -999,14 +1424,17 @@ def render_paso_13(distritos, cursos):
         step=1,
         value=int(resp.get("t_anios", 0)),
         key=wk("t_anios"),
+        disabled=not ss.es_operador,
     )
-    resp["t_anios"] = int(t_val)
+    if ss.es_operador:
+        resp["t_anios"] = int(t_val)
     sugerido = na.puntos_desempeno(resp["t_anios"])
 
     if resp.get("mantiene") == "Sí":
         idx_u = [0, 5, 6, 8].index(resp["u_prev"]) if resp["u_prev"] in [0, 5, 6, 8] else [0, 5, 6, 8].index(sugerido)
-        u_sel = st.selectbox("Puntaje anterior firme (Col. U)", [0, 5, 6, 8], index=idx_u, key=wk("u_prev"))
-        resp["u_prev"] = int(u_sel)
+        u_sel = st.selectbox("Puntaje anterior firme (Col. U)", [0, 5, 6, 8], index=idx_u, key=wk("u_prev"), disabled=not ss.es_operador)
+        if ss.es_operador:
+            resp["u_prev"] = int(u_sel)
         st.caption(f"Sugerido por años: {sugerido} pts · Registrado: **{resp['u_prev']}** pts")
     else:
         st.caption(f"Col. T = **{resp['t_anios'] or '—'}** años · Col. U = **{sugerido if resp['t_anios'] else '—'}** pts")
@@ -1026,10 +1454,12 @@ def render_paso_14(distritos, cursos):
         index=idx,
         horizontal=True,
         key=wk("form_sup"),
+        disabled=not ss.es_operador,
         format_func=lambda x: "Sí (7 pts)" if x == SI else "No (0 pts)",
     )
-    if v_sel is not None:
+    if ss.es_operador and v_sel is not None:
         resp["form_sup"] = na.PTS_FORM_SUP_FP if v_sel == SI else 0
+    if resp["form_sup"] is not None:
         st.caption(f"Col. V = **{resp['form_sup']}** pts")
 
 
@@ -1046,8 +1476,10 @@ def render_paso_15(distritos, cursos):
         step=0.5,
         value=float(resp.get("antig_doc", 0.0)),
         key=wk("antig_doc"),
+        disabled=not ss.es_operador,
     )
-    resp["antig_doc"] = float(w_val)
+    if ss.es_operador:
+        resp["antig_doc"] = float(w_val)
     pts = na.puntos_antiguedad_docencia(resp["antig_doc"])
     st.caption(f"Col. W = **{pts:.2f}** pts ({resp['antig_doc']} años × 0.25, tope {na.TOPE_ANTIG_DOCENCIA:.2f})")
 
@@ -1065,8 +1497,10 @@ def render_paso_16(distritos, cursos):
         step=0.5,
         value=float(resp.get("antig_fp", 0.0)),
         key=wk("antig_fp"),
+        disabled=not ss.es_operador,
     )
-    resp["antig_fp"] = float(x_val)
+    if ss.es_operador:
+        resp["antig_fp"] = float(x_val)
     pts = na.puntos_antiguedad_fp(resp["antig_fp"])
     st.caption(f"Col. X = **{pts:.2f}** pts ({resp['antig_fp']} años × 0.50, tope {na.TOPE_ANTIG_FP:.2f})")
 
@@ -1081,8 +1515,11 @@ def render_paso_17(distritos, cursos):
     lista_c = list(CALIF_OPCIONES.keys())
     idx1 = lista_c.index(resp["calif1"]) if resp["calif1"] in lista_c else lista_c.index(CALIF_DEFECTO)
     idx2 = lista_c.index(resp["calif2"]) if resp["calif2"] in lista_c else lista_c.index(CALIF_DEFECTO)
-    resp["calif1"] = c1.selectbox("Calificación 1 (Col. Y)", lista_c, index=idx1, key=wk("calif1"))
-    resp["calif2"] = c2.selectbox("Calificación 2 (Col. Z)", lista_c, index=idx2, key=wk("calif2"))
+    c1_val = c1.selectbox("Calificación 1 (Col. Y)", lista_c, index=idx1, key=wk("calif1"), disabled=not ss.es_operador)
+    c2_val = c2.selectbox("Calificación 2 (Col. Z)", lista_c, index=idx2, key=wk("calif2"), disabled=not ss.es_operador)
+    if ss.es_operador:
+        resp["calif1"] = c1_val
+        resp["calif2"] = c2_val
     st.caption(f"Col. Y = **{CALIF_OPCIONES[resp['calif1']]:.2f}** · Col. Z = **{CALIF_OPCIONES[resp['calif2']]:.2f}**")
 
 
@@ -1100,15 +1537,16 @@ def render_paso_18(distritos, cursos):
         index=idx,
         horizontal=True,
         key=wk("art59"),
+        disabled=not ss.es_operador,
         format_func=lambda x: "Sí – Sin cargos titulares (10 pts)" if x == SI else "No – Con cargos titulares (0 pts)",
     )
-    if aa_sel is not None:
+    if ss.es_operador and aa_sel is not None:
         resp["art59"] = na.PTS_ART59 if aa_sel == SI else 0
 
     st.divider()
     if ss.es_otro_curso:
         st.markdown("##### 📋 Resumen de Datos Comunes Precargados del Aspirante")
-        st.caption("Verifique los datos comunes vigentes para este legajo o salte a su paso si desea corregirlos:")
+        st.caption("Verifique los datos comunes vigentes para este legajo:")
         rc1, rc2, rc3 = st.columns(3)
         rc1.markdown(f"- **DNI:** `{resp.get('dni_txt')}`\n- **Apellido y Nombres:** {resp.get('apellido')}, {resp.get('nombres')}\n- **Distrito 1:** {resp.get('d1') or '—'} (Col. H: {na.puntos_residencia(resp.get('r1')) if resp.get('d1') else '—'} pts)")
         rc2.markdown(f"- **Certificado FI (Col. M):** {resp.get('fi')} pts ({na.calcular_listado(resp.get('fi')) if resp.get('fi') in (0, na.PTS_FI) else '—'})\n- **Form. Superior FP (Col. V):** {resp.get('form_sup') or 0} pts\n- **Art. 59 (Col. AA):** {resp.get('art59') or 0} pts")
@@ -1126,13 +1564,23 @@ def render_paso_18(distritos, cursos):
     r2.metric("Puntaje con +5 de Residencia", f"{calc['con_residencia']:.2f}")
     r3.metric("PUNTAJE (Col. AB) a guardar", f"{calc['ab']:.2f}")
 
+    # Resumen Zoom/Meet
+    st.markdown("##### 🗣️ Resumen de Lectura para la Comisión (Zoom/Meet)")
+    st.text_area(
+        "Dictamen en voz alta (copiable o para dictar en la reunión):",
+        value=texto_lectura_comision(hoja, datos),
+        height=200,
+        key="txt_lectura_zoom_p18",
+        disabled=True,
+    )
+
     errs = validar_todo(resp)
     for e in errs:
         st.error(e)
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("💾 Guardar y evaluar OTRO curso del MISMO aspirante", **_ancho(st.button)):
+        if st.button("💾 Guardar y evaluar OTRO curso del MISMO aspirante", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los pasos incompletos antes de guardar.")
             else:
@@ -1140,7 +1588,7 @@ def render_paso_18(distritos, cursos):
                 resetear_curso()
                 st.rerun()
     with c2:
-        if st.button("✅ Guardar y cargar NUEVO aspirante", type="primary", **_ancho(st.button)):
+        if st.button("✅ Guardar y cargar NUEVO aspirante", type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los pasos incompletos antes de guardar.")
             else:
@@ -1225,6 +1673,9 @@ def panel_asistente_izq(distritos: list[str], cursos: list[str]) -> None:
     st.markdown(f"### Paso {p_num_lbl} de {len(ruta)} · Col. {paso_def['cols']}")
     st.progress(progreso)
 
+    if not ss.es_operador:
+        st.warning("👁️ **Modo Observador Activo:** La edición y guardado están deshabilitados. Si acordó relevar el cargo, presione 'Tomar el control de carga' arriba.")
+
     # Render del widget del paso activo
     paso_def["render"](distritos, cursos)
 
@@ -1242,7 +1693,6 @@ def panel_asistente_izq(distritos: list[str], cursos: list[str]) -> None:
             st.rerun()
 
     with c_sel:
-        # Selector compacto de pasos
         opciones_sel = [p_i for p_i in ruta]
         limite_invalido = primer_paso_invalido(resp)
         idx_limite = ruta.index(limite_invalido) if limite_invalido in ruta else len(ruta) - 1
@@ -1303,7 +1753,6 @@ def panel_ayuda_der() -> None:
 
     st.markdown(f"#### 📖 Ayuda Normativa y Ejemplos\n*Paso {'8B' if p == 19 else p} · Columna(s) {paso_def['cols']}*")
 
-    # Si hay perfil de nuevo diseño del Anexo 2 Com 07/2026 y p >= 7
     if p >= 7 and curso:
         perfil_txt = na.texto_perfil_nuevo_diseno(curso)
         if perfil_txt:
@@ -1387,6 +1836,7 @@ def preview_en_vivo() -> None:
 # --------------------------------------------------------------------------- #
 def grilla_general(cursos: list[str], distritos: list[str]) -> None:
     ss = st.session_state
+    deshab = not ss.es_operador
     st.markdown("#### 2. Planilla general")
 
     tabs = st.tabs([
@@ -1402,7 +1852,6 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                 continue
 
             base_orden = resumen_base(_mtime())["meritudos" if hoja == HOJA_MER else "no_meritudos"]
-
             cols_def = COLS_OFICIALES_MER if hoja == HOJA_MER else COLS_OFICIALES_NO_MER
             col_a_clave = {f"{letra} · {etiq}": clave for clave, letra, etiq in cols_def}
 
@@ -1420,49 +1869,48 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
 
             df = pd.DataFrame(filas)
 
-            # Configuraciones de columna
-            cfg = {"🗑": st.column_config.CheckboxColumn("🗑", default=False, help="Marcar para eliminar")}
+            cfg = {"🗑": st.column_config.CheckboxColumn("🗑", default=False, disabled=deshab, help="Marcar para eliminar")}
             cfg["A · ORDEN"] = st.column_config.NumberColumn("A · ORDEN", disabled=True)
             if hoja == HOJA_MER:
                 cfg["B · LISTADO"] = st.column_config.TextColumn("B · LISTADO", disabled=True)
-                cfg["C · DNI"] = st.column_config.NumberColumn("C · DNI", format="%d", step=1)
-                cfg["D · APELLIDO"] = st.column_config.TextColumn("D · APELLIDO")
-                cfg["E · NOMBRES"] = st.column_config.TextColumn("E · NOMBRES")
+                cfg["C · DNI"] = st.column_config.NumberColumn("C · DNI", format="%d", step=1, disabled=deshab)
+                cfg["D · APELLIDO"] = st.column_config.TextColumn("D · APELLIDO", disabled=deshab)
+                cfg["E · NOMBRES"] = st.column_config.TextColumn("E · NOMBRES", disabled=deshab)
                 cfg["F · ESPECIALIDAD (TRAYECTO, CURSO Y/O MÓDULO)"] = st.column_config.SelectboxColumn(
-                    "F · ESPECIALIDAD (TRAYECTO, CURSO Y/O MÓDULO)", options=cursos
+                    "F · ESPECIALIDAD (TRAYECTO, CURSO Y/O MÓDULO)", options=cursos, disabled=deshab
                 )
-                cfg["G · Distrito 1"] = st.column_config.SelectboxColumn("G · Distrito 1", options=distritos)
-                cfg["H · ptos."] = st.column_config.NumberColumn("H · ptos.", min_value=0, max_value=5, step=5)
-                cfg["I · Distrito 2"] = st.column_config.SelectboxColumn("I · Distrito 2", options=[None] + distritos)
-                cfg["J · ptos."] = st.column_config.NumberColumn("J · ptos.", min_value=0, max_value=5, step=5)
-                cfg["K · Distrito 3"] = st.column_config.SelectboxColumn("K · Distrito 3", options=[None] + distritos)
-                cfg["L · ptos."] = st.column_config.NumberColumn("L · ptos.", min_value=0, max_value=5, step=5)
-                cfg["M · INSTRUCTOR DE FP – FI"] = st.column_config.NumberColumn("M · INSTRUCTOR DE FP – FI", min_value=0, max_value=25, step=25)
-                cfg["N · FORMACIÓN ESPECÍFICA – Secundario"] = st.column_config.NumberColumn("N · Secundario", min_value=0, max_value=3, step=3)
-                cfg["O · FORMACIÓN ESPECÍFICA – Sec. técnico"] = st.column_config.NumberColumn("O · Sec. técnico", min_value=0, max_value=5, step=5)
-                cfg["P · FORMACIÓN ESPECÍFICA – Superior"] = st.column_config.NumberColumn("P · Superior", min_value=0, max_value=7, step=7)
-                cfg["Q · FORMACIÓN ESPECÍFICA – Universitario"] = st.column_config.NumberColumn("Q · Universitario", min_value=0, max_value=8, step=8)
-                cfg["R · CAPACITACIÓN DOCENTE"] = st.column_config.NumberColumn("R · CAPACITACIÓN DOCENTE", min_value=0.0, max_value=3.0, step=0.05, format="%.2f")
-                cfg["S · CAPACITACIÓN ESPECÍFICA"] = st.column_config.NumberColumn("S · CAPACITACIÓN ESPECÍFICA", min_value=0.0, max_value=5.0, step=0.05, format="%.2f")
-                cfg["T · DESEMPEÑO PROFESIONAL – años"] = st.column_config.NumberColumn("T · AÑOS", min_value=0, max_value=35, step=1, format="%d")
-                cfg["U · DESEMPEÑO PROFESIONAL – pts"] = st.column_config.NumberColumn("U · DESEMP. PTS", min_value=0, max_value=8, step=1)
-                cfg["V · FORMACIÓN SUPERIOR EN FP"] = st.column_config.NumberColumn("V · FORMACIÓN SUPERIOR EN FP", min_value=0, max_value=7, step=7)
-                cfg["W · ANTIGÜEDAD DOCENCIA OFICIAL"] = st.column_config.NumberColumn("W · ANTIGÜEDAD DOCENCIA", min_value=0.0, max_value=2.5, step=0.25, format="%.2f")
-                cfg["X · ANTIGÜEDAD ÁMBITO FP OFICIAL"] = st.column_config.NumberColumn("X · ANTIGÜEDAD FP", min_value=0.0, max_value=5.0, step=0.5, format="%.2f")
-                cfg["Y · CALIFICACIÓN 1"] = st.column_config.NumberColumn("Y · CALIF 1", min_value=0.0, max_value=1.0, step=0.1, format="%.2f")
-                cfg["Z · CALIFICACIÓN 2"] = st.column_config.NumberColumn("Z · CALIF 2", min_value=0.0, max_value=1.0, step=0.1, format="%.2f")
-                cfg["AA · ART 59 DEL ESTATUTO DOCENTE"] = st.column_config.NumberColumn("AA · ART 59", min_value=0, max_value=10, step=10)
+                cfg["G · Distrito 1"] = st.column_config.SelectboxColumn("G · Distrito 1", options=distritos, disabled=deshab)
+                cfg["H · ptos."] = st.column_config.NumberColumn("H · ptos.", min_value=0, max_value=5, step=5, disabled=deshab)
+                cfg["I · Distrito 2"] = st.column_config.SelectboxColumn("I · Distrito 2", options=[None] + distritos, disabled=deshab)
+                cfg["J · ptos."] = st.column_config.NumberColumn("J · ptos.", min_value=0, max_value=5, step=5, disabled=deshab)
+                cfg["K · Distrito 3"] = st.column_config.SelectboxColumn("K · Distrito 3", options=[None] + distritos, disabled=deshab)
+                cfg["L · ptos."] = st.column_config.NumberColumn("L · ptos.", min_value=0, max_value=5, step=5, disabled=deshab)
+                cfg["M · INSTRUCTOR DE FP – FI"] = st.column_config.NumberColumn("M · INSTRUCTOR DE FP – FI", min_value=0, max_value=25, step=25, disabled=deshab)
+                cfg["N · FORMACIÓN ESPECÍFICA – Secundario"] = st.column_config.NumberColumn("N · Secundario", min_value=0, max_value=3, step=3, disabled=deshab)
+                cfg["O · FORMACIÓN ESPECÍFICA – Sec. técnico"] = st.column_config.NumberColumn("O · Sec. técnico", min_value=0, max_value=5, step=5, disabled=deshab)
+                cfg["P · FORMACIÓN ESPECÍFICA – Superior"] = st.column_config.NumberColumn("P · Superior", min_value=0, max_value=7, step=7, disabled=deshab)
+                cfg["Q · FORMACIÓN ESPECÍFICA – Universitario"] = st.column_config.NumberColumn("Q · Universitario", min_value=0, max_value=8, step=8, disabled=deshab)
+                cfg["R · CAPACITACIÓN DOCENTE"] = st.column_config.NumberColumn("R · CAPACITACIÓN DOCENTE", min_value=0.0, max_value=3.0, step=0.05, format="%.2f", disabled=deshab)
+                cfg["S · CAPACITACIÓN ESPECÍFICA"] = st.column_config.NumberColumn("S · CAPACITACIÓN ESPECÍFICA", min_value=0.0, max_value=5.0, step=0.05, format="%.2f", disabled=deshab)
+                cfg["T · DESEMPEÑO PROFESIONAL – años"] = st.column_config.NumberColumn("T · AÑOS", min_value=0, max_value=35, step=1, format="%d", disabled=deshab)
+                cfg["U · DESEMPEÑO PROFESIONAL – pts"] = st.column_config.NumberColumn("U · DESEMP. PTS", min_value=0, max_value=8, step=1, disabled=deshab)
+                cfg["V · FORMACIÓN SUPERIOR EN FP"] = st.column_config.NumberColumn("V · FORMACIÓN SUPERIOR EN FP", min_value=0, max_value=7, step=7, disabled=deshab)
+                cfg["W · ANTIGÜEDAD DOCENCIA OFICIAL"] = st.column_config.NumberColumn("W · ANTIGÜEDAD DOCENCIA", min_value=0.0, max_value=2.5, step=0.25, format="%.2f", disabled=deshab)
+                cfg["X · ANTIGÜEDAD ÁMBITO FP OFICIAL"] = st.column_config.NumberColumn("X · ANTIGÜEDAD FP", min_value=0.0, max_value=5.0, step=0.5, format="%.2f", disabled=deshab)
+                cfg["Y · CALIFICACIÓN 1"] = st.column_config.NumberColumn("Y · CALIF 1", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", disabled=deshab)
+                cfg["Z · CALIFICACIÓN 2"] = st.column_config.NumberColumn("Z · CALIF 2", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", disabled=deshab)
+                cfg["AA · ART 59 DEL ESTATUTO DOCENTE"] = st.column_config.NumberColumn("AA · ART 59", min_value=0, max_value=10, step=10, disabled=deshab)
                 cfg["AB · PUNTAJE"] = st.column_config.NumberColumn("AB · PUNTAJE", disabled=True, format="%.2f")
             else:
-                cfg["C · DNI"] = st.column_config.NumberColumn("C · DNI", format="%d", step=1)
-                cfg["D · APELLIDO"] = st.column_config.TextColumn("D · APELLIDO")
-                cfg["E · NOMBRES"] = st.column_config.TextColumn("E · NOMBRES")
-                cfg["F · ESPECIALIDAD"] = st.column_config.SelectboxColumn("F · ESPECIALIDAD", options=cursos)
-                cfg["G · Distrito 1"] = st.column_config.SelectboxColumn("G · Distrito 1", options=distritos)
-                cfg["H · Distrito 2"] = st.column_config.SelectboxColumn("H · Distrito 2", options=[None] + distritos)
-                cfg["I · Distrito 3"] = st.column_config.SelectboxColumn("I · Distrito 3", options=[None] + distritos)
-                cfg["J · NO MERITUA / MOTIVO"] = st.column_config.SelectboxColumn("J · MOTIVO", options=na.MOTIVOS_NO_MERITUADO)
-                cfg["K · OBSERVACIONES DE LA COMISIÓN EVALUADORA"] = st.column_config.TextColumn("K · OBSERVACIONES")
+                cfg["C · DNI"] = st.column_config.NumberColumn("C · DNI", format="%d", step=1, disabled=deshab)
+                cfg["D · APELLIDO"] = st.column_config.TextColumn("D · APELLIDO", disabled=deshab)
+                cfg["E · NOMBRES"] = st.column_config.TextColumn("E · NOMBRES", disabled=deshab)
+                cfg["F · ESPECIALIDAD"] = st.column_config.SelectboxColumn("F · ESPECIALIDAD", options=cursos, disabled=deshab)
+                cfg["G · Distrito 1"] = st.column_config.SelectboxColumn("G · Distrito 1", options=distritos, disabled=deshab)
+                cfg["H · Distrito 2"] = st.column_config.SelectboxColumn("H · Distrito 2", options=[None] + distritos, disabled=deshab)
+                cfg["I · Distrito 3"] = st.column_config.SelectboxColumn("I · Distrito 3", options=[None] + distritos, disabled=deshab)
+                cfg["J · NO MERITUA / MOTIVO"] = st.column_config.SelectboxColumn("J · MOTIVO", options=na.MOTIVOS_NO_MERITUADO, disabled=deshab)
+                cfg["K · OBSERVACIONES DE LA COMISIÓN EVALUADORA"] = st.column_config.TextColumn("K · OBSERVACIONES", disabled=deshab)
 
             editor_key = f"editor_{hoja}_{ss.ver_tabla}"
             st.data_editor(
@@ -1471,15 +1919,16 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                 num_rows="fixed",
                 height=350,
                 column_config=cfg,
+                disabled=deshab,
                 key=editor_key,
                 **_ancho(st.data_editor),
             )
 
-            # Procesamiento de ediciones
+            # Botones de eliminación y lectura oral
+            c_del, c_lect = st.columns([2, 3])
             estado_editor = ss.get(editor_key)
             edited_rows = (estado_editor or {}).get("edited_rows", {})
 
-            # Detección de filas marcadas para eliminar
             marcadas_indices = []
             filas_con_datos_editados = {}
 
@@ -1495,11 +1944,9 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                 if not solo_tacho:
                     filas_con_datos_editados[idx_f] = cambios
 
-            # Botón de eliminación en popover
-            c_del, _ = st.columns([2, 5])
             with c_del.popover(
-                f"🗑️ Eliminar filas seleccionadas ({len(marcadas_indices)})",
-                disabled=len(marcadas_indices) == 0,
+                f"🗑️ Eliminar filas marcadas ({len(marcadas_indices)})",
+                disabled=len(marcadas_indices) == 0 or deshab,
                 **_ancho(st.popover),
             ):
                 st.warning(f"¿Confirma eliminar las {len(marcadas_indices)} fila(s) seleccionadas?")
@@ -1511,8 +1958,24 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                     ss.flash = f"🗑️ Se eliminaron {len(ids_a_borrar)} registro(s)."
                     st.rerun()
 
-            # Aplicar modificaciones de celdas si las hubiera
-            if filas_con_datos_editados:
+            with c_lect.popover("🗣️ Ver Resumen de Lectura para Zoom/Meet", **_ancho(st.popover)):
+                opciones_aspirantes = [
+                    f"Fila {i + 1}: {it['datos'].get('apellido', '')}, {it['datos'].get('nombres', '')} – {it['datos'].get('especialidad', '')}"
+                    for i, it in enumerate(items)
+                ]
+                sel_asp = st.selectbox("Seleccione fila a dictar/leer:", opciones_aspirantes, key=f"sel_asp_lect_{hoja}")
+                idx_asp = opciones_aspirantes.index(sel_asp) if sel_asp in opciones_aspirantes else 0
+                item_sel = items[idx_asp]
+                st.text_area(
+                    "Texto listo para lectura oral:",
+                    value=texto_lectura_comision(hoja, item_sel["datos"]),
+                    height=240,
+                    key=f"txt_lectura_{hoja}_{idx_asp}",
+                    disabled=True,
+                )
+
+            # Aplicar modificaciones si es operador
+            if filas_con_datos_editados and ss.es_operador:
                 todos_avisos = []
                 for idx_f, cambios in filas_con_datos_editados.items():
                     if idx_f >= len(items):
@@ -1548,16 +2011,36 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
 # Función Principal (main)
 # --------------------------------------------------------------------------- #
 def main() -> None:
-    init_estado()
-    sanear_resp()
+    # Autenticación obligatoria (§12.4)
+    if st.session_state.get("usuario_actual") is None:
+        pantalla_login()
+        st.stop()
+
+    usr = st.session_state.usuario_actual
 
     try:
-        cursos, distritos = listas(_mtime())
+        cursos, distritos_todos = listas(_mtime())
     except Exception as exc:  # noqa: BLE001
         st.error(f"No se pudo leer la planilla base: {exc}")
         st.stop()
 
-    top_bar(distritos)
+    # Filtro de distritos según permisos del usuario (§12.3.1)
+    if usr.get("rol") == "admin" or "TODOS" in usr.get("distritos_permitidos", []):
+        distritos_disponibles = distritos_todos
+    else:
+        permitidos = usr.get("distritos_permitidos", [])
+        distritos_disponibles = [d for d in distritos_todos if d in permitidos]
+        if not distritos_disponibles:
+            st.error("Su usuario no posee distritos habilitados. Solicite al Administrador la asignación de su distrito.")
+            if st.button("🚪 Cerrar Sesión"):
+                st.session_state.usuario_actual = None
+                st.rerun()
+            st.stop()
+
+    init_estado(distritos_disponibles, usr)
+    sanear_resp()
+
+    top_bar(distritos_disponibles, distritos_todos)
 
     if st.session_state.flash:
         st.success(st.session_state.flash)
@@ -1568,7 +2051,7 @@ def main() -> None:
 
     with col_izq:
         with st.container(border=True, height=520):
-            panel_asistente_izq(distritos, cursos)
+            panel_asistente_izq(distritos_todos, cursos)
 
     with col_der:
         with st.container(border=True, height=520):
@@ -1578,7 +2061,7 @@ def main() -> None:
     with st.container(border=True):
         preview_en_vivo()
         st.divider()
-        grilla_general(cursos, distritos)
+        grilla_general(cursos, distritos_todos)
 
 
 if __name__ == "__main__":

@@ -836,3 +836,312 @@ def main()
 | D11 | Datos “comunes” precargados al evaluar otro curso | `CAMPOS_COMUNES` (C–L, M, V, W, X, Y, Z, AA); R, S, T/U, N–Q y habilitación se vuelven a preguntar. |
 | D12 | Edición de registros guardados | Solo desde la grilla (se elimina “cargar de nuevo en el asistente”). |
 | D13 | `PLANILLA_TRABAJO.xlsx` y backups | El `app.py` v2 no los usa (la descarga parte siempre del original); las funciones siguen en `extractor_datos.py`. |
+
+---
+
+# 12. SEGURIDAD, PERMISOS POR DISTRITO Y AISLAMIENTO MULTI-DISTRITO
+
+> **Instrucción para el modelo programador:**
+> 1. Crear el nuevo módulo `auth_usuarios.py` usando **exclusivamente la librería estándar** (`hashlib`, `json`, `os`, `datetime`, `pathlib`).
+> 2. No modificar `extractor_datos.py` ni `normativa_ayuda.py`.
+> 3. Integrar la autenticación, permisos, aislamiento y modo Zoom/Meet en `app.py` respetando las firmas y reglas definidas a continuación.
+
+---
+
+## 12.0 Visión General y Objetivos
+Para permitir el trabajo simultáneo de comisiones evaluadoras que operan en paralelo en distintas mesas o videollamadas (Zoom/Google Meet):
+1. **Seguridad y Auditoría:** Autenticación obligatoria con roles (`admin` y `evaluador`) y contraseñas hasheadas en SHA-256.
+2. **Permisos Granulares:** Cada usuario evaluador tiene asignada una lista de distritos habilitados (`distritos_permitidos`). El administrador tiene acceso a `"TODOS"`.
+3. **Aislamiento Multi-Distrito:** Cada distrito cuenta con su propio archivo de base de datos JSON en `salida/registros_<slug_distrito>.json`. Distintas comisiones pueden trabajar al mismo tiempo en distritos diferentes sin riesgo de colisión ni sobreescritura de datos.
+4. **Control de Operador Único (Anti-Colisión en Zoom/Meet):** En un mismo distrito solo puede haber **un operador activo** escribiendo. Si otro evaluador del mismo distrito ingresa, entra en *"Modo Observador (Solo Lectura)"* viendo en vivo lo que se carga, con posibilidad de solicitar/tomar el relevo acordado en la videollamada.
+5. **Modo Lectura para Videollamada:** Cuadro de texto limpio y ordenado para que el operador lea en voz alta a la Comisión en Zoom/Meet los datos y puntajes asignados antes de confirmar la carga.
+
+---
+
+## 12.1 Módulo `auth_usuarios.py`
+
+### 12.1.1 Archivos de Persistencia y Estructura JSON
+
+- Directorio base: `salida/` (respetando `extractor_datos.DIR_SALIDA`).
+- Archivo de usuarios: `salida/usuarios.json`.
+- Archivo de bloqueos activos: `salida/bloqueos_distrito.json`.
+
+#### Estructura de `salida/usuarios.json`:
+```json
+{
+  "version": 1,
+  "usuarios": {
+    "admin": {
+      "username": "admin",
+      "password_hash": "7110eda4d09e062aa5e4a390b0a572ac0d2c0220ac73a56647537149f54ace3b",
+      "nombre": "Administrador General",
+      "rol": "admin",
+      "distritos_permitidos": ["TODOS"],
+      "creado": "2026-10-23T12:00:00"
+    },
+    "comision_mercedes": {
+      "username": "comision_mercedes",
+      "password_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+      "nombre": "Comisión Mercedes",
+      "rol": "evaluador",
+      "distritos_permitidos": ["Reg 10 Distrito: 070-MERCEDES"],
+      "creado": "2026-10-23T12:10:00"
+    }
+  }
+}
+```
+
+*Nota sobre inicialización:* Si `salida/usuarios.json` no existe, se crea automáticamente con el usuario `admin` por defecto:
+- `username`: `"admin"`
+- `password` en texto plano inicial: `"admin2027"`
+- `password_hash`: SHA-256 de `"admin2027"`
+- `nombre`: `"Administrador General"`
+- `rol`: `"admin"`
+- `distritos_permitidos`: `["TODOS"]`
+
+#### Estructura de `salida/bloqueos_distrito.json`:
+```json
+{
+  "Reg 10 Distrito: 070-MERCEDES": {
+    "username": "comision_mercedes",
+    "nombre": "Comisión Mercedes",
+    "timestamp": "2026-10-23T12:35:10"
+  }
+}
+```
+
+### 12.1.2 Especificación de Firmas de Funciones en `auth_usuarios.py`
+
+```python
+from __future__ import annotations
+import datetime
+import hashlib
+import json
+from pathlib import Path
+
+DIR_SALIDA = Path(__file__).resolve().parent / "salida"
+RUTA_USUARIOS = DIR_SALIDA / "usuarios.json"
+RUTA_BLOQUEOS = DIR_SALIDA / "bloqueos_distrito.json"
+
+def hashear_password(password: str) -> str:
+    """Devuelve el hash SHA-256 en hexadecimal."""
+    ...
+
+def inicializar_almacen() -> None:
+    """Crea los archivos JSON si no existen y asegura el usuario admin por defecto."""
+    ...
+
+def verificar_credenciales(username: str, password: str) -> dict | None:
+    """Verifica usuario y contraseña.
+    Devuelve dict del usuario (sin password_hash) si es correcto; si falla, devuelve None."""
+    ...
+
+def listar_usuarios() -> dict[str, dict]:
+    """Devuelve diccionario de todos los usuarios registrados (con campos públicos, sin hash)."""
+    ...
+
+def crear_o_actualizar_usuario(
+    username: str,
+    password: str | None,
+    nombre: str,
+    rol: str,
+    distritos_permitidos: list[str]
+) -> tuple[bool, str]:
+    """Crea un nuevo usuario o actualiza uno existente.
+    Si password es None o vacío al actualizar, conserva el hash anterior.
+    Valida que username no sea vacío y que rol sea 'admin' o 'evaluador'.
+    Devuelve (True, 'Mensaje de éxito') o (False, 'Motivo del error')."""
+    ...
+
+def eliminar_usuario(username: str) -> tuple[bool, str]:
+    """Elimina el usuario indicado.
+    PROHIBIDO eliminar al usuario 'admin' (devuelve False)."""
+    ...
+
+# --- Control de Operador Único ---
+
+def obtener_operador_distrito(distrito: str) -> dict | None:
+    """Devuelve dict con {'username', 'nombre', 'timestamp'} del operador activo del distrito,
+    o None si el distrito no tiene operador asignado."""
+    ...
+
+def tomar_control_distrito(distrito: str, username: str, nombre: str) -> dict:
+    """Asigna al usuario como Operador Activo del distrito con timestamp actual.
+    Persiste en salida/bloqueos_distrito.json y devuelve el registro creado."""
+    ...
+
+def liberar_control_distrito(distrito: str, username: str) -> bool:
+    """Si el distrito está operado por username, lo libera y guarda en disco.
+    Devuelve True si liberó el bloqueo, False en caso contrario."""
+    ...
+
+def listar_bloqueos() -> dict[str, dict]:
+    """Devuelve el mapa completo de distritos y sus operadores activos."""
+    ...
+```
+
+---
+
+## 12.2 Aislamiento de Archivos de Datos por Distrito
+
+### 12.2.1 Nomenclatura y Persistencia
+1. Ya no se utiliza un único archivo global `sesion_registros.json` para todos los distritos.
+2. Cada distrito evaluador guarda y lee sus registros en:
+   ```
+   salida/registros_<slug_distrito>.json
+   ```
+   Ejemplo:
+   - Para `"Reg 10 Distrito: 070-MERCEDES"` → `salida/registros_070-MERCEDES.json` (usando `slug_distrito()`).
+3. Estructura interna del archivo por distrito:
+   ```json
+   {
+     "version": 2,
+     "distrito": "Reg 10 Distrito: 070-MERCEDES",
+     "sig_id": 14,
+     "config": {
+       "incluir_residencia_ab": false
+     },
+     "registros": [
+       {"id": 1, "hoja": "MER", "datos": { ... }},
+       {"id": 2, "hoja": "NOMER", "datos": { ... }}
+     ]
+   }
+   ```
+4. **Retrocompatibilidad / Migración:**
+   Si al abrir un distrito no existe su archivo `registros_<slug>.json`, pero existe el archivo legado `salida/sesion_registros.json`, se leen los registros que coincidan con dicho distrito evaluador; en caso contrario, se inicializa con lista vacía.
+
+### 12.2.2 Ciclo de Cambio de Distrito
+Al cambiar el selector de distrito evaluador en la barra superior:
+1. Si el usuario actual tenía tomado el control del distrito anterior, se ejecuta `auth.liberar_control_distrito(distrito_anterior, usuario)`.
+2. Se cargan los registros desde `salida/registros_<slug_nuevo_distrito>.json`.
+3. Se verifica si el nuevo distrito tiene operador activo:
+   - Si no tiene operador: el usuario toma automáticamente el control (`auth.tomar_control_distrito`).
+   - Si ya está ocupado por otro usuario: entra en **Modo Observador (Solo Lectura)**.
+
+---
+
+## 12.3 Reglas de Concurrencia y Permisos
+
+### 12.3.1 Roles y Filtro de Distritos
+| Rol | Distritos accesibles en el selector | Permisos de Administración |
+|---|---|---|
+| `admin` | **TODOS** los distritos (priorizando Región 10). | Alta/baja de usuarios, reasignar contraseñas, ver bloqueos globales. |
+| `evaluador` | Únicamente los definidos en `distritos_permitidos` del usuario. | Sin acceso al panel de administración. |
+
+*Regla:* Si un evaluador tiene asignado `["Reg 10 Distrito: 067-MARCOS PAZ", "Reg 10 Distrito: 057-GENERAL LAS HERAS"]`, el `selectbox` superior solo le mostrará esas dos opciones.
+
+### 12.3.2 Modo Operador Activo vs Modo Observador
+- **Operador Activo (`es_operador = True`):**
+  - Muestra insignia verde: `🟢 Operador Activo (Edición habilitada)`.
+  - El asistente permite escribir, avanzar pasos y presionar los botones de guardado.
+  - La grilla inferior `st.data_editor` está habilitada para edición directa celda por celda y borrado de filas.
+- **Modo Observador (`es_operador = False`):**
+  - Muestra cartel amarillo o azul destacado:
+    `👁️ Modo Observador (Operando actualmente: {nombre_operador} desde las {hora})`.
+  - **Bloqueo de edición:** Los campos del asistente se muestran deshabilitados (`disabled=True`), los botones de guardado están deshabilitados.
+  - La grilla `st.data_editor` se muestra con `disabled=True`.
+  - **Botón de Relevo:** Se incluye el botón `🤝 Tomar el control de carga`. Al presionarlo (previo acuerdo en la reunión de Zoom/Meet), se transfiere el rol de operador al usuario actual y se notifica con `st.toast`.
+
+---
+
+## 12.4 Pantalla de Login en `app.py`
+
+1. Si `st.session_state.get("usuario_actual") is None`:
+   - Se renderiza un contenedor centrado con ancho restringido (usando columnas `[1, 1.2, 1]`).
+   - Título: `🔐 Acceso a la Comisión Evaluadora de FP`.
+   - Campos: `Usuario` y `Contraseña` (`type="password"`).
+   - Botón: `Iniciar Sesión` (valida contra `auth_usuarios.verificar_credenciales`).
+   - Si las credenciales son inválidas: `st.error("Usuario o contraseña incorrectos")`.
+   - Si son válidas: se guarda en `st.session_state.usuario_actual = dict_usuario`, se inicializa el distrito y se ejecuta `st.rerun()`.
+   - Se detiene la ejecución del resto de `app.py` mediante `st.stop()`.
+2. **Cierre de sesión:**
+   - Botón permanente `"🚪 Cerrar Sesión"` en la barra superior.
+   - Acción: llama a `auth_usuarios.liberar_control_distrito`, borra `usuario_actual` de `session_state` y ejecuta `st.rerun()`.
+
+---
+
+## 12.5 Panel de Administración (Exclusivo `rol == "admin"`)
+
+Visible únicamente cuando `usuario_actual["rol"] == "admin"`.
+Se ubica en un contenedor colapsable o pestaña superior (`st.expander("⚙️ Panel de Administración de Usuarios y Comisiones")`):
+1. **Pestaña 1: Gestión de Usuarios:**
+   - Formulario para Crear / Modificar usuario:
+     * Nombre de usuario (`username`).
+     * Nombre visible / Comisión (ej. `"Comisión Luján - Mesa 1"`).
+     * Contraseña (opcional al editar: si se deja vacía mantiene la actual).
+     * Rol (`evaluador` o `admin`).
+     * `st.multiselect` de Distritos Permitidos (con opción rápida de seleccionar toda la Región 10).
+   - Botón `Guardar Usuario`.
+2. **Pestaña 2: Monitoreo en Vivo de Comisiones y Bloqueos:**
+   - Tabla con todos los usuarios registrados.
+   - Lista en tiempo real de qué distritos están bloqueados y quién es el operador activo en ese instante.
+   - Botón para **forzar liberación de bloqueo** de un distrito (por si un usuario cerró la pestaña sin cerrar sesión).
+   - Botón para eliminar usuarios (con confirmación; protegido contra borrado de `admin`).
+3. **Pestaña 3: Mi Contraseña de Administrador:**
+   - Campo para cambiar la clave del usuario `admin` actual.
+
+---
+
+## 12.6 Modo Lectura de Verificación para Zoom/Meet
+
+Para agilizar la dinámica de trabajo en videollamada, el operador no debe perder tiempo leyendo celda por celda ni dictando números sueltos. Se implementa un generador de **Lectura Limpia y Fluida**.
+
+### 12.6.1 Función Generadora de Resumen Textual
+En `app.py` (o helper de presentación):
+```python
+def texto_lectura_comision(hoja: str, datos: dict) -> str:
+    """Devuelve un texto formateado en prosa estructurada, listo para ser leído en voz alta
+    por el operador a los demás integrantes de la comisión en Zoom/Meet."""
+```
+
+### 12.6.2 Formato del Texto de Lectura
+```markdown
+🗣️ RESUMEN DE LECTURA PARA LA COMISIÓN (Dictamen en voz alta):
+--------------------------------------------------------------------------------
+• Aspirante: {APELLIDO}, {NOMBRES}  |  DNI: {DNI}
+• Especialidad / Curso: {CURSO}
+• Dictamen: {MERITÚA en Hoja MERITUADOS | NO MERITÚA en Hoja NO MERITUADOS}
+
+[Si NO MERITÚA]:
+• Motivo de exclusión (Col. J): {MOTIVO}
+• Observaciones de la Comisión (Col. K): {OBSERVACIONES}
+
+[Si MERITÚA]:
+• Distritos Solicitados y Residencia:
+  - Distrito 1: {D1} ({5 pts por residencia | 0 pts})
+  - Distrito 2: {D2 o 'No solicita'} ({5 o 0 pts})
+  - Distrito 3: {D3 o 'No solicita'} ({5 o 0 pts})
+• Listado y Formación:
+  - Certificado FI (Col. M): {Posee 25 pts -> Listado PRINCIPAL | No posee 0 pts -> Listado COMPLEMENTARIO}
+  - Formación Específica (Cols. N-Q): {Nombre del título} ({PTS} pts en Col. {LETRA})
+  - Formación Superior en FP (Col. V): {Acredita 7 pts | 0 pts}
+• Capacitaciones:
+  - Capacitación Docente (Col. R): {PUNTOS} pts (tope 3.00)
+  - Capacitación Específica (Col. S): {PUNTOS} pts (tope 5.00)
+• Trayectoria y Calificaciones:
+  - Desempeño Profesional (Cols. T y U): {AÑOS} años acreditados -> {PUNTOS} pts
+  - Antigüedad Docencia Oficial (Col. W): {AÑOS} años -> {PUNTOS} pts
+  - Antigüedad FP Oficial (Col. X): {AÑOS} años -> {PUNTOS} pts
+  - Calificaciones SET 4 (Cols. Y y Z): Año 1 = {Y} pts | Año 2 = {Z} pts
+  - Art. 59 Estatuto (Col. AA): {10 pts sin cargos titulares | 0 pts}
+--------------------------------------------------------------------------------
+>>> PUNTAJE BASE: {BASE} pts
+>>> PUNTAJE CON RESIDENCIA (+5): {CON_RESIDENCIA} pts
+>>> PUNTAJE FINAL COLUMNA AB A GUARDAR: {AB} pts
+```
+
+### 12.6.3 Ubicación en la Interfaz
+1. **En el Paso 18 (Confirmación Final):** Dentro de un contenedor destacado `st.info` con botón `"📋 Copiar resumen para el chat de Zoom/Meet"`.
+2. **En la Planilla General Editable:** Botón `"🗣️ Leer fila seleccionada"` que abre un diálogo/popover con el dictamen listo para repasar con la Comisión.
+
+---
+
+## 12.7 Criterios de Aceptación y Pruebas del §12
+- [ ] Si no hay sesión iniciada, solo se visualiza la pantalla de login; ninguna planilla ni dato es accesible.
+- [ ] Las credenciales por defecto `admin` / `admin2027` ingresan correctamente con rol `admin`.
+- [ ] El administrador puede crear usuarios evaluadores con distritos asignados; las contraseñas quedan almacenadas en hash SHA-256 en `salida/usuarios.json`.
+- [ ] Un usuario `evaluador` solo ve en el selector de la cabecera los distritos que tiene permitidos.
+- [ ] Cada distrito guarda sus registros en `salida/registros_<slug>.json`; cargar registros en Luján no modifica los de Mercedes ni Marcos Paz.
+- [ ] Si el Usuario A está operando el Distrito Mercedes, el Usuario B ve el cartel de `Modo Observador` y no puede modificar ni guardar hasta presionar `Tomar el control de carga`.
+- [ ] El resumen de lectura para Zoom/Meet genera el texto claro y completo con todos los ítems de las columnas A a AB.
+
