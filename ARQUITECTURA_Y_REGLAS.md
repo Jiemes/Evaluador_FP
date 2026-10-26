@@ -1145,3 +1145,257 @@ def texto_lectura_comision(hoja: str, datos: dict) -> str:
 - [ ] Si el Usuario A está operando el Distrito Mercedes, el Usuario B ve el cartel de `Modo Observador` y no puede modificar ni guardar hasta presionar `Tomar el control de carga`.
 - [ ] El resumen de lectura para Zoom/Meet genera el texto claro y completo con todos los ítems de las columnas A a AB.
 
+---
+
+# 13. FAMILIAS PROFESIONALES (CATÁLOGO 2027), MULTISELECCIÓN DE CURSOS, ALTA DE CURSOS NUEVOS Y CORRECCIÓN DE ANTIGÜEDADES
+
+> **Instrucción para el modelo programador:**
+> 1. Modificar `extractor_datos.py` agregando la persistencia de cursos personalizados y su integración con `'Hoja 2'`.
+> 2. Modificar `normativa_ayuda.py` incorporando el diccionario de familias profesionales, la extracción de familias y las listas de valores permitidos y normalizadores de antigüedad.
+> 3. Modificar `app.py` rediseñando el Paso 7 (familia + multiselección de especialidades), el guardado múltiple en Pasos 18 y 19, los selectores de años enteros en Pasos 15 y 16, y las `SelectboxColumn` de Cols. W y X en `st.data_editor`.
+
+---
+
+## 13.1 Diccionario de Familias Profesionales según Catálogo 2027
+
+Cada curso de Formación Profesional tiene un código alfanumérico cuyo prefijo de 2 caracteres define su **Familia Profesional** según el Catálogo de Títulos y Certificaciones de la Provincia de Buenos Aires (Listados 2027).
+
+### 13.1.1 Mapeo Oficial de Familias
+En `normativa_ayuda.py`:
+```python
+FAMILIAS_PROFESIONALES: dict[str, str] = {
+    "00": "00 - Cargos Docentes (Pañol / Preceptor)",
+    "AA": "AA - Actividades Agropecuarias",
+    "AC": "AC - Administración y Comercialización",
+    "AE": "AE - Aeronáutica",
+    "AP": "AP - Actividades Pesqueras",
+    "CC": "CC - Cuero y Calzado",
+    "CS": "CS - Comunicación Social",
+    "EE": "EE - Energía Eléctrica",
+    "EM": "EM - Electromecánica",
+    "ET": "ET - Electrónica",
+    "GH": "GH - Gastronomía / Hotelería y Turismo",
+    "IA": "IA - Industria Alimentaria",
+    "IC": "IC - Industrias Culturales y Creativas",
+    "IG": "IG - Industria Gráfica",
+    "IM": "IM - Informática",
+    "LT": "LT - Logística y Transporte",
+    "MA": "MA - Automotriz",
+    "MC": "MC - Módulos Comunes",
+    "MM": "MM - Madera y Mueble",
+    "MT": "MT - Metalmecánica",
+    "OA": "OA - Oficios Artesanales",
+    "OC": "OC - Construcciones",
+    "PA": "PA - Industria Papelera",
+    "PL": "PL - Industria Plástica",
+    "SC": "SC - Cuidados y Servicios Sociocomunitarios",
+    "SM": "SM - Seguridad y Medio Ambiente",
+    "SP": "SP - Estética Profesional",
+    "SS": "SS - Salud",
+    "TC": "TC - Telecomunicaciones",
+    "TI": "TI - Textil e Indumentaria",
+    "OT": "OT - Otros / Nuevos Cursos",
+}
+```
+
+### 13.1.2 Funciones de Utilidad en `normativa_ayuda.py`
+```python
+def obtener_prefijo_familia(curso: str | None) -> str:
+    """Devuelve el prefijo de 2 letras del curso (ej: 'IM30 - ...' -> 'IM').
+    Si no coincide con ninguna familia conocida, devuelve 'OT'."""
+    if not curso or len(curso) < 2:
+        return "OT"
+    prefijo = curso[:2].upper()
+    return prefijo if prefijo in FAMILIAS_PROFESIONALES else "OT"
+
+def obtener_nombre_familia(curso: str | None) -> str:
+    """Devuelve el nombre completo descriptivo de la familia."""
+    pref = obtener_prefijo_familia(curso)
+    return FAMILIAS_PROFESIONALES.get(pref, FAMILIAS_PROFESIONALES["OT"])
+```
+
+---
+
+## 13.2 Base de Datos Persistente de Cursos Nuevos (`salida/cursos_personalizados.json`)
+
+### 13.2.1 Inicialización Automática con los 14 Cursos del Catálogo 2027
+La planilla base original (`Hoja 2`, Columna A) omitía 14 cursos aprobados en la Resolución del Catálogo Oficial 2027 (IF-2026-29133749-GDEBA-DFPDGCYE).
+Al iniciar la aplicación, si el archivo `salida/cursos_personalizados.json` no existe, se crea automáticamente con la siguiente lista precargada:
+
+```json
+{
+  "version": 1,
+  "cursos": [
+    "AA54 - Armadora/or de Invernáculos",
+    "AA55 - Podadora/or Frutícola",
+    "AC36 - Promotora/or de cooperativas y mutuales",
+    "IA19 - Elaboradora/or de productos lácteos diversificados",
+    "OC49 - Operaria/o Ladrillera/o",
+    "IG10 - Operadora/or en Diseño para la Industria Gráfica",
+    "MM12 - Desarrolladora/or de Mobiliario y Productos de Carpintería",
+    "MT44 - Montadora/or Cañista Industrial",
+    "SC03 - Operadora/or de Cuidados de Personas con Discapacidad",
+    "TC01 - Empalmadora/or de Fibra Óptica",
+    "TC02 - Instaladora/or Reparadora/or de redes de acceso FTTH y redes internas del cliente",
+    "TC03 - Analista en Redes de Telecomunicaciones",
+    "TC04 - Operadora/or de Redes de Fibra Óptica",
+    "MC01 - Orientación Profesional"
+  ]
+}
+```
+
+### 13.2.2 Firmas y Funciones en `extractor_datos.py`
+
+```python
+RUTA_CURSOS_PERSONALIZADOS = DIR_SALIDA / "cursos_personalizados.json"
+
+CURSOS_CATALOGO_2027_INICIALES = [
+    "AA54 - Armadora/or de Invernáculos",
+    "AA55 - Podadora/or Frutícola",
+    "AC36 - Promotora/or de cooperativas y mutuales",
+    "IA19 - Elaboradora/or de productos lácteos diversificados",
+    "OC49 - Operaria/o Ladrillera/o",
+    "IG10 - Operadora/or en Diseño para la Industria Gráfica",
+    "MM12 - Desarrolladora/or de Mobiliario y Productos de Carpintería",
+    "MT44 - Montadora/or Cañista Industrial",
+    "SC03 - Operadora/or de Cuidados de Personas con Discapacidad",
+    "TC01 - Empalmadora/or de Fibra Óptica",
+    "TC02 - Instaladora/or Reparadora/or de redes de acceso FTTH y redes internas del cliente",
+    "TC03 - Analista en Redes de Telecomunicaciones",
+    "TC04 - Operadora/or de Redes de Fibra Óptica",
+    "MC01 - Orientación Profesional",
+]
+
+def inicializar_cursos_personalizados() -> None:
+    """Crea salida/cursos_personalizados.json con los 14 cursos si no existe."""
+    ...
+
+def obtener_cursos_personalizados() -> list[str]:
+    """Devuelve la lista limpia de cursos guardados en salida/cursos_personalizados.json."""
+    ...
+
+def agregar_o_editar_curso_personalizado(
+    codigo_nombre_nuevo: str,
+    codigo_nombre_anterior: str | None = None
+) -> tuple[bool, str]:
+    """Agrega un curso nuevo o reemplaza uno anterior si se editó.
+    Guarda en salida/cursos_personalizados.json y retorna (True, mensaje) o (False, error)."""
+    ...
+
+def obtener_todos_los_cursos(ruta_base: Path = RUTA_ORIGINAL) -> list[str]:
+    """Une los cursos de 'Hoja 2' (columna A) con los de cursos_personalizados.json,
+    sin duplicados y ordenados alfabéticamente."""
+    ...
+```
+
+### 13.2.3 Inyección de Cursos Personalizados en `exportar_excel_bytes()`
+Para que el archivo `.xlsx` oficial descargado sea 100% válido y compatible con Google Sheets y Excel:
+1. Al momento de generar el libro en memoria, se compara la lista de cursos utilizados en las hojas `MERITUADOS` y `NO MERITUADOS` contra la Columna A de `'Hoja 2'`.
+2. Si hay cursos que no están en la Columna A de `'Hoja 2'` (por ser cursos nuevos o personalizados), **se insertan a continuación al final de la Columna A de `'Hoja 2'`**.
+3. Se actualizan las referencias de las validaciones de datos de lista en las hojas de datos para que el rango cubra hasta la última fila poblada de `'Hoja 2'`, garantizando que las listas desplegables de Excel reconozcan todos los cursos oficiales y nuevos sin arrojar advertencias.
+4. Si el evaluador edita la celda de la Columna F en la planilla `st.data_editor` escribiendo un nombre nuevo, el sistema lo incorpora automáticamente a `salida/cursos_personalizados.json`.
+
+---
+
+## 13.3 Rediseño del Paso 7: Selección de Familia + Multiselección de Especialidades
+
+Muchos aspirantes se inscriben a varios cursos de la misma familia profesional (por ejemplo, en Informática a `IM30 - Usuario de IA Generativa`, `IM01 - Operador de PC` e `IM05 - Programador`). El sistema debe permitir cargar todos los cursos del legajo en un solo flujo.
+
+### 13.3.1 Componentes de la Interfaz en el Paso 7
+En `col_izq` (Paso 7 - Columna F):
+1. **Selector de Familia Profesional (`st.selectbox`):**
+   - Opciones: `["TODAS LAS FAMILIAS"] + list(FAMILIAS_PROFESIONALES.values())`.
+   - Por defecto: `"TODAS LAS FAMILIAS"`.
+2. **Selector Múltiple de Especialidades (`st.multiselect`):**
+   - Etiqueta: `"Especialidades a las que se inscribe el aspirante (seleccione una o varias) *"`
+   - Opciones filtradas dinámicamente según la familia seleccionada (pero conservando en la selección las especialidades ya marcadas aunque se cambie de familia en el dropdown).
+   - `resp["cursos_seleccionados"]: list[str]` almacena todos los cursos elegidos para este aspirante.
+   - Si no hay cursos seleccionados, bloquea el avance al Paso 8.
+3. **Bloque Desplegable `"➕ Agregar / Editar Especialidad que no está en el listado"`:**
+   - Un `st.expander` con:
+     * Selector del prefijo de familia (ej: `IM`, `MT`, `AC`).
+     * Campo de texto para el código específico (ej: `IM31`).
+     * Campo de texto para el nombre oficial del curso (ej: `Especialista en Ciberseguridad Aplicada`).
+     * Botón `"💾 Guardar Curso en Base de Datos"`: ejecuta `extractor_datos.agregar_o_editar_curso_personalizado(...)`, lo agrega a `salida/cursos_personalizados.json`, lo incorpora a las opciones y lo añade automáticamente a `resp["cursos_seleccionados"]`.
+
+### 13.3.2 Guardado Múltiple Automático (Pasos 18 y 19)
+- En el Paso 18 (y Paso 19 si no meritúa), al hacer clic en cualquiera de los dos botones de guardado (`💾 Guardar y evaluar OTRO curso...` o `✅ Guardar y cargar NUEVO aspirante`):
+  1. El sistema toma la lista `resp["cursos_seleccionados"]`.
+  2. Para cada curso `c` de la lista:
+     * Construye los datos con `especialidad = c`.
+     * Asigna un nuevo `id` único consecutivo y calcula el `PUNTAJE (Col. AB)` correspondiente.
+     * Inserta la fila en `MERITUADOS` o `NO MERITUADOS`.
+  3. Muestra mensaje de éxito: `f"✅ Se guardaron {len(cursos_seleccionados)} cursos para {apellido}, {nombres}."`
+  4. Si alguna de las especialidades requiere un ajuste puntual de puntaje, el evaluador puede modificar la celda directamente en la grilla inferior `st.data_editor`.
+
+---
+
+## 13.4 Corrección Estricta de Antigüedad Docente (Col. W) y Antigüedad en FP (Col. X)
+
+### 13.4.1 Marco Normativo y Regla de Cálculo
+- **Prohibición de Decimales Arbitrarios:** El Estatuto Docente y los Ítems 10.7 y 10.8 de la Disposición 13/2025 establecen que la antigüedad se acredita exclusivamente en **años lectivos completos** mediante Certificación de Servicios oficial. Valores arbitrarios (como `0.63` o `1.15`) son **inválidos**.
+- **Paso 15 - Columna W (Antigüedad en Docencia Oficial - Ítem 10.7):**
+  * Puntos por año lectivo: **0.25 pts**.
+  * Tope máximo: **2.50 pts** (se alcanza a los 10 años).
+  * Entrada de usuario: Selector de años lectivos enteros: `0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 o más`.
+  * Cálculo: `round(min(anios, 10) * 0.25, 2)`.
+  * Valores admitidos estrictos: `[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5]`.
+- **Paso 16 - Columna X (Antigüedad en el Ámbito de FP Oficial - Ítem 10.8):**
+  * Puntos por año lectivo: **0.50 pts**.
+  * Tope máximo: **5.00 pts** (se alcanza a los 10 años).
+  * Entrada de usuario: Selector de años lectivos enteros: `0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 o más`.
+  * Cálculo: `round(min(anios, 10) * 0.50, 2)`.
+  * Valores admitidos estrictos: `[0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]`.
+
+### 13.4.2 Saneamiento y Normalización en `normativa_ayuda.py`
+Se agregan funciones puras para validar y sanear valores en memoria o cargados desde JSON:
+
+```python
+VALORES_PERMITIDOS_ANTIG_DOCENCIA = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5)
+VALORES_PERMITIDOS_ANTIG_FP = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0)
+
+def normalizar_antiguedad_docencia(valor: float | int | None) -> float:
+    """Redondea al múltiplo de 0.25 más cercano en el rango [0.0, 2.5]."""
+    if valor is None:
+        return 0.0
+    v = float(valor)
+    if v <= 0:
+        return 0.0
+    if v >= 2.5:
+        return 2.5
+    return min(VALORES_PERMITIDOS_ANTIG_DOCENCIA, key=lambda x: abs(x - v))
+
+def normalizar_antiguedad_fp(valor: float | int | None) -> float:
+    """Redondea al múltiplo de 0.50 más cercano en el rango [0.0, 5.0]."""
+    if valor is None:
+        return 0.0
+    v = float(valor)
+    if v <= 0:
+        return 0.0
+    if v >= 5.0:
+        return 5.0
+    return min(VALORES_PERMITIDOS_ANTIG_FP, key=lambda x: abs(x - v))
+```
+
+- Al leer cualquier archivo `salida/registros_<slug>.json`, la función `cargar_distrito()` pasa automáticamente cada fila por `normalizar_antiguedad_docencia` y `normalizar_antiguedad_fp`, asegurando que registros antiguos con decimales no estándar queden regularizados y con la Columna AB recalculada.
+
+### 13.4.3 Grilla `st.data_editor`
+En la configuración de columnas de la grilla editable:
+- **Columna W:** Reemplazar `NumberColumn` por `SelectboxColumn(options=[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5])`.
+- **Columna X:** Reemplazar `NumberColumn` por `SelectboxColumn(options=[0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0])`.
+- De este modo se imposibilita que el usuario tipee decimales erróneos en la tabla.
+
+---
+
+## 13.5 Criterios de Aceptación y Pruebas del §13
+- [ ] Al iniciar la app por primera vez, se genera `salida/cursos_personalizados.json` con los 14 cursos faltantes del Catálogo 2027.
+- [ ] La lista de cursos en pantalla unifica los de `'Hoja 2'` con los de `salida/cursos_personalizados.json` sin duplicados.
+- [ ] En el Paso 7, el usuario puede filtrar por Familia Profesional y seleccionar múltiples cursos a la vez.
+- [ ] Al guardar un aspirante con N cursos seleccionados en el Paso 7, se generan automáticamente N filas en la planilla con los puntajes y datos correspondientes.
+- [ ] Es posible dar de alta un curso nuevo en el Paso 7 y que quede inmediatamente disponible y seleccionado.
+- [ ] En el Paso 15, el usuario selecciona años enteros (0 a 10) y Columna W solo adopta múltiplos de 0.25 (máx 2.50).
+- [ ] En el Paso 16, el usuario selecciona años enteros (0 a 10) y Columna X solo adopta múltiplos de 0.50 (máx 5.00).
+- [ ] En `st.data_editor`, las Columnas W y X son desplegables con valores oficiales estrictos.
+- [ ] La descarga del archivo `.xlsx` inyecta los cursos nuevos en la Columna A de `'Hoja 2'`, manteniendo la validez del libro en Excel y Google Sheets.
+
+

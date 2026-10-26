@@ -14,6 +14,7 @@ El archivo original NUNCA se modifica: se trabaja sobre `salida/PLANILLA_TRABAJO
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 import shutil
@@ -42,6 +43,60 @@ COL_CURSOS = 1      # Hoja 2, columna A
 COL_DISTRITOS = 3   # Hoja 2, columna C
 COL_DNI = 3         # columna C en ambas hojas de datos
 COL_DISTRITO_EVALUADOR = "D1"
+
+# Diccionario de Familias Profesionales (Catálogo 2027, §13.1)
+FAMILIAS_PROFESIONALES: dict[str, str] = {
+    "00": "00 - Cargos Docentes (Pañol / Preceptor)",
+    "AA": "AA - Actividades Agropecuarias",
+    "AC": "AC - Administración y Comercialización",
+    "AE": "AE - Aeronáutica",
+    "AP": "AP - Actividades Pesqueras",
+    "CC": "CC - Cuero y Calzado",
+    "CS": "CS - Comunicación Social",
+    "EE": "EE - Energía Eléctrica",
+    "EM": "EM - Electromecánica",
+    "ET": "ET - Electrónica",
+    "GH": "GH - Gastronomía / Hotelería y Turismo",
+    "IA": "IA - Industria Alimentaria",
+    "IC": "IC - Industrias Culturales y Creativas",
+    "IG": "IG - Industria Gráfica",
+    "IM": "IM - Informática",
+    "LT": "LT - Logística y Transporte",
+    "MA": "MA - Automotriz",
+    "MC": "MC - Módulos Comunes",
+    "MM": "MM - Madera y Mueble",
+    "MT": "MT - Metalmecánica",
+    "OA": "OA - Oficios Artesanales",
+    "OC": "OC - Construcciones",
+    "PA": "PA - Industria Papelera",
+    "PL": "PL - Industria Plástica",
+    "SC": "SC - Cuidados y Servicios Sociocomunitarios",
+    "SM": "SM - Seguridad y Medio Ambiente",
+    "SP": "SP - Estética Profesional",
+    "SS": "SS - Salud",
+    "TC": "TC - Telecomunicaciones",
+    "TI": "TI - Textil e Indumentaria",
+    "OT": "OT - Otros / Nuevos Cursos",
+}
+
+RUTA_CURSOS_PERSONALIZADOS = DIR_SALIDA / "cursos_personalizados.json"
+
+CURSOS_CATALOGO_2027_INICIALES = [
+    "AA54 - Armadora/or de Invernáculos",
+    "AA55 - Podadora/or Frutícola",
+    "AC36 - Promotora/or de cooperativas y mutuales",
+    "IA19 - Elaboradora/or de productos lácteos diversificados",
+    "OC49 - Operaria/o Ladrillera/o",
+    "IG10 - Operadora/or en Diseño para la Industria Gráfica",
+    "MM12 - Desarrolladora/or de Mobiliario y Productos de Carpintería",
+    "MT44 - Montadora/or Cañista Industrial",
+    "SC03 - Operadora/or de Cuidados de Personas con Discapacidad",
+    "TC01 - Empalmadora/or de Fibra Óptica",
+    "TC02 - Instaladora/or Reparadora/or de redes de acceso FTTH y redes internas del cliente",
+    "TC03 - Analista en Redes de Telecomunicaciones",
+    "TC04 - Operadora/or de Redes de Fibra Óptica",
+    "MC01 - Orientación Profesional",
+]
 
 # Códigos de distrito (Región 10) a mostrar primero, en este orden:
 # 067-MARCOS PAZ, 057-GENERAL LAS HERAS, 063-LUJÁN, 070-MERCEDES,
@@ -211,24 +266,131 @@ def ordenar_distritos(distritos: list[str]) -> list[str]:
     return prioritarios + resto_reg10 + otras
 
 
+# --------------------------------------------------------------------------- #
+# Cursos Personalizados y Familias Profesionales (§13)
+# --------------------------------------------------------------------------- #
+def inicializar_cursos_personalizados() -> None:
+    """Crea salida/cursos_personalizados.json con los 14 cursos del Catálogo 2027 si no existe."""
+    if not RUTA_CURSOS_PERSONALIZADOS.exists():
+        DIR_SALIDA.mkdir(parents=True, exist_ok=True)
+        payload = {"version": 1, "cursos": list(CURSOS_CATALOGO_2027_INICIALES)}
+        RUTA_CURSOS_PERSONALIZADOS.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+
+def obtener_cursos_personalizados() -> list[str]:
+    """Devuelve la lista limpia de cursos guardados en salida/cursos_personalizados.json."""
+    inicializar_cursos_personalizados()
+    try:
+        data = json.loads(RUTA_CURSOS_PERSONALIZADOS.read_text(encoding="utf-8"))
+        raw = data.get("cursos", [])
+        return _lista_limpia(raw)
+    except Exception:
+        return list(CURSOS_CATALOGO_2027_INICIALES)
+
+
+def agregar_o_editar_curso_personalizado(
+    codigo_nombre_nuevo: str,
+    codigo_nombre_anterior: str | None = None
+) -> tuple[bool, str]:
+    """Agrega un curso nuevo o reemplaza uno anterior si se editó.
+    Guarda en salida/cursos_personalizados.json y retorna (True, mensaje) o (False, error)."""
+    nuevo = (codigo_nombre_nuevo or "").strip()
+    if not nuevo or len(nuevo) < 3:
+        return False, "El nombre o código del curso debe tener al menos 3 caracteres."
+
+    cursos = obtener_cursos_personalizados()
+    if codigo_nombre_anterior and codigo_nombre_anterior.strip() in cursos:
+        idx = cursos.index(codigo_nombre_anterior.strip())
+        cursos[idx] = nuevo
+        msg = f"Curso '{codigo_nombre_anterior}' modificado a '{nuevo}' con éxito."
+    else:
+        if nuevo in cursos:
+            return True, f"El curso '{nuevo}' ya existía en la base de datos."
+        cursos.append(nuevo)
+        msg = f"Curso '{nuevo}' guardado en la base de datos con éxito."
+
+    try:
+        DIR_SALIDA.mkdir(parents=True, exist_ok=True)
+        payload = {"version": 1, "cursos": cursos}
+        RUTA_CURSOS_PERSONALIZADOS.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        return True, msg
+    except Exception as exc:
+        return False, f"Error al guardar el curso: {exc}"
+
+
+def obtener_prefijo_familia(curso: str | None) -> str:
+    """Devuelve el prefijo de 2 letras del curso (ej: 'IM30 - ...' -> 'IM').
+    Si no coincide con ninguna familia conocida, devuelve 'OT'."""
+    if not curso or len(str(curso).strip()) < 2:
+        return "OT"
+    pref = str(curso).strip()[:2].upper()
+    return pref if pref in FAMILIAS_PROFESIONALES else "OT"
+
+
+def obtener_nombre_familia(curso: str | None) -> str:
+    """Devuelve el nombre completo descriptivo de la familia."""
+    pref = obtener_prefijo_familia(curso)
+    return FAMILIAS_PROFESIONALES.get(pref, FAMILIAS_PROFESIONALES["OT"])
+
+
+def obtener_cursos_por_familia(prefijo: str, cursos: list[str]) -> list[str]:
+    """Filtra una lista de cursos por prefijo de familia o 'TODAS LAS FAMILIAS'."""
+    if not prefijo or prefijo in ("TODAS", "TODAS LAS FAMILIAS"):
+        return list(cursos)
+    p = prefijo.strip().upper()
+    if " - " in p:
+        p = p.split(" - ")[0].strip()
+    if p not in FAMILIAS_PROFESIONALES:
+        p = "OT"
+    return [c for c in cursos if obtener_prefijo_familia(c) == p]
+
+
+def obtener_todos_los_cursos(ruta_base: Path = RUTA_ORIGINAL) -> list[str]:
+    """Une los cursos de 'Hoja 2' (columna A) con los de cursos_personalizados.json,
+    sin duplicados y ordenados alfabéticamente."""
+    cursos_base: list[str] = []
+    p_base = Path(ruta_base)
+    if p_base.exists():
+        try:
+            wb = load_workbook(p_base, read_only=True, data_only=True)
+            if HOJA_LISTAS in wb.sheetnames:
+                ws = wb[HOJA_LISTAS]
+                cursos_base = _lista_limpia(
+                    v for (v,) in ws.iter_rows(min_col=COL_CURSOS, max_col=COL_CURSOS, values_only=True)
+                )
+            wb.close()
+        except Exception:
+            pass
+
+    personalizados = obtener_cursos_personalizados()
+    todos = _lista_limpia(cursos_base + personalizados)
+    todos.sort()
+    return todos
+
+
 def cargar_listas(ruta: Path = RUTA_ORIGINAL) -> tuple[list[str], list[str]]:
-    """(cursos, distritos) leídos de 'Hoja 2' (col. A y col. C). Sin vacíos ni duplicados.
-    Los distritos salen ordenados con la Región 10 primero."""
+    """(cursos, distritos) leídos de 'Hoja 2' (col. A y col. C) unificados con cursos personalizados.
+    Sin vacíos ni duplicados. Los distritos salen ordenados con la Región 10 primero."""
     wb = load_workbook(ruta, read_only=True, data_only=True)
     try:
         if HOJA_LISTAS not in wb.sheetnames:
             raise ErrorEstructuraPlanilla(f"Falta la hoja '{HOJA_LISTAS}'.")
         ws = wb[HOJA_LISTAS]
-        cursos = _lista_limpia(v for (v,) in ws.iter_rows(
-            min_col=COL_CURSOS, max_col=COL_CURSOS, values_only=True))
         distritos = _lista_limpia(v for (v,) in ws.iter_rows(
             min_col=COL_DISTRITOS, max_col=COL_DISTRITOS, values_only=True))
     finally:
         wb.close()
-    if not cursos:
-        raise ErrorEstructuraPlanilla("'Hoja 2', columna A: no se encontraron cursos.")
     if not distritos:
         raise ErrorEstructuraPlanilla("'Hoja 2', columna C: no se encontraron distritos.")
+    cursos = obtener_todos_los_cursos(ruta)
+    if not cursos:
+        raise ErrorEstructuraPlanilla("'Hoja 2', columna A: no se encontraron cursos.")
     return cursos, ordenar_distritos(distritos)
 
 
@@ -377,7 +539,9 @@ def exportar_excel_bytes(meritudos: list[dict], no_meritudos: list[dict],
                          ruta_base: Path = RUTA_ORIGINAL) -> bytes:
     """Inserta TODOS los registros dados sobre una copia en memoria de `ruta_base` (que no se
     modifica) y devuelve el .xlsx resultante. Respeta formato, celdas combinadas, validaciones
-    y fórmulas. Si se indica `distrito_evaluador`, se escribe en D1 de ambas hojas."""
+    y fórmulas. Si se indica `distrito_evaluador`, se escribe en D1 de ambas hojas.
+    Además, agrega cualquier curso personalizado o usado a 'Hoja 2' (Col A) y actualiza
+    los rangos de validación de datos para que Excel reconozca todos los cursos (§13.2.3)."""
     wb = load_workbook(ruta_base)
     try:
         _validar_estructura(wb)
@@ -386,6 +550,42 @@ def exportar_excel_bytes(meritudos: list[dict], no_meritudos: list[dict],
                 celda = wb[hoja][COL_DISTRITO_EVALUADOR]
                 if not isinstance(celda, MergedCell):
                     celda.value = distrito_evaluador
+
+        # §13.2.3: Inserción de cursos personalizados o usados en 'Hoja 2' Col A
+        if HOJA_LISTAS in wb.sheetnames:
+            ws2 = wb[HOJA_LISTAS]
+            cursos_existentes = set()
+            ultima_fila = 0
+            for r in range(1, ws2.max_row + 1):
+                val = ws2.cell(r, COL_CURSOS).value
+                if val is not None and str(val).strip():
+                    cursos_existentes.add(str(val).strip())
+                    ultima_fila = r
+
+            # Cursos a incorporar (de registros cargados y de cursos_personalizados.json)
+            cursos_nuevos = []
+            for reg in meritudos + no_meritudos:
+                esp = reg.get("especialidad") or reg.get("curso")
+                if esp and str(esp).strip() and str(esp).strip() not in cursos_existentes and str(esp).strip() not in cursos_nuevos:
+                    cursos_nuevos.append(str(esp).strip())
+            for c in obtener_cursos_personalizados():
+                c_limpio = str(c).strip()
+                if c_limpio and c_limpio not in cursos_existentes and c_limpio not in cursos_nuevos:
+                    cursos_nuevos.append(c_limpio)
+
+            if cursos_nuevos:
+                for c in cursos_nuevos:
+                    ultima_fila += 1
+                    ws2.cell(ultima_fila, COL_CURSOS, value=c)
+                    cursos_existentes.add(c)
+
+            nuevo_rango_dv = f"'{HOJA_LISTAS}'!$A$1:$A${ultima_fila}"
+            for hoja_nombre in (HOJA_MER, HOJA_NO_MER):
+                ws_h = wb[hoja_nombre]
+                for dv in ws_h.data_validations.dataValidation:
+                    if dv.formula1 and "Hoja 2" in str(dv.formula1) and "$A$" in str(dv.formula1):
+                        dv.formula1 = nuevo_rango_dv
+
         for reg in meritudos:
             _escribir_fila(wb[HOJA_MER], _preparar_registro(reg, REQUERIDOS_MER), COL_MER)
         for reg in no_meritudos:

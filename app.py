@@ -94,6 +94,7 @@ CAMPOS_COMUNES = [
     "dni_txt", "apellido", "nombres",
     "d1", "d2", "d3",
     "r1", "r2", "r3",
+    "familia_filtro",
     "fi", "form_sup", "antig_doc", "antig_fp",
     "calif1", "calif2", "art59",
 ]
@@ -233,7 +234,20 @@ def cargar_distrito(distrito: str, usuario: dict) -> None:
 
     ss.distrito_eval = distrito
     data = _leer_disco_distrito(distrito)
-    ss.registros = data.get("registros", [])
+    registros = data.get("registros", [])
+
+    # §13.4.2 Saneamiento automático de registros
+    for r in registros:
+        d = r.get("datos", {})
+        if r.get("hoja") == HOJA_MER:
+            if "antig_docencia" in d:
+                d["antig_docencia"] = na.normalizar_antiguedad_docencia(d.get("antig_docencia"))
+            if "antig_fp" in d:
+                d["antig_fp"] = na.normalizar_antiguedad_fp(d.get("antig_fp"))
+            res = na.calcular_ab(d, distrito, data.get("config", {}).get("incluir_residencia_ab", False))
+            d["puntaje"] = res["ab"]
+
+    ss.registros = registros
     ss.sig_id = data.get("sig_id", max([r["id"] for r in ss.registros], default=0) + 1)
     cfg = data.get("config", {})
     ss.incluir_residencia_ab = cfg.get("incluir_residencia_ab", False)
@@ -265,6 +279,8 @@ def nueva_resp() -> dict:
         "dni_txt": "", "apellido": "", "nombres": "",
         "d1": None, "d2": None, "d3": None,
         "r1": False, "r2": False, "r3": False,
+        "familia_filtro": "TODAS LAS FAMILIAS",
+        "cursos_seleccionados": [],
         "curso": None, "confirm_dup": False,
         "hab": None, "req_comunes": False, "mantiene": None,
         "motivo": na.MOTIVO_NO_REUNE, "obs": "",
@@ -274,7 +290,7 @@ def nueva_resp() -> dict:
         "modo_esp": "Certificados", "cert_esp": [], "dir_esp": 0.0,
         "t_anios": 0, "u_prev": None,
         "form_sup": None,
-        "antig_doc": 0.0, "antig_fp": 0.0,
+        "antig_doc": 0, "antig_fp": 0,
         "calif1": CALIF_DEFECTO, "calif2": CALIF_DEFECTO,
         "art59": None,
     }
@@ -338,7 +354,9 @@ def _al_cambiar_config() -> None:
 # Cache de Excel e información de base
 # --------------------------------------------------------------------------- #
 def _mtime() -> float:
-    return ed.RUTA_ORIGINAL.stat().st_mtime
+    t_orig = ed.RUTA_ORIGINAL.stat().st_mtime if ed.RUTA_ORIGINAL.exists() else 0.0
+    t_pers = ed.RUTA_CURSOS_PERSONALIZADOS.stat().st_mtime if ed.RUTA_CURSOS_PERSONALIZADOS.exists() else 0.0
+    return max(t_orig, t_pers)
 
 
 @st.cache_data(show_spinner="Leyendo cursos y distritos de 'Hoja 2'…")
@@ -377,7 +395,7 @@ def etiqueta_formacion(opcion: str) -> str:
 
 
 def _registros(hoja: str) -> list[dict]:
-    return [r for r in st.session_state.registros if r["hoja"] == hoja]
+    return [r for r in st.session_state.get("registros", []) if r["hoja"] == hoja]
 
 
 def _orden_siguiente(hoja: str) -> int:
@@ -391,7 +409,7 @@ def duplicados(dni: int | None, curso: str | None) -> list[str]:
     ss = st.session_state
     hallados = [
         f"sesión actual ({'MERITUADOS' if r['hoja'] == HOJA_MER else 'NO MERITUADOS'})"
-        for r in ss.registros
+        for r in ss.get("registros", [])
         if r["datos"].get("dni") == dni and r["datos"].get("especialidad") == curso
     ]
     hallados += [
@@ -494,6 +512,20 @@ def construir_datos(resp: dict, distrito_eval: str, incluir: bool) -> tuple[str,
     calc = na.calcular_ab(datos, distrito_eval, incluir)
     datos["puntaje"] = calc["ab"]
     return hoja, datos
+
+
+def construir_datos_multiples(resp: dict, distrito_eval: str, incluir: bool) -> tuple[str, list[dict]]:
+    """Genera una fila por cada especialidad seleccionada en resp['cursos_seleccionados']."""
+    cursos_sel = resp.get("cursos_seleccionados") or ([resp["curso"]] if resp.get("curso") else [""])
+    filas = []
+    hoja_res = HOJA_MER
+    for c in cursos_sel:
+        resp_c = dict(resp)
+        resp_c["curso"] = c
+        h, d = construir_datos(resp_c, distrito_eval, incluir)
+        hoja_res = h
+        filas.append(d)
+    return hoja_res, filas
 
 
 def texto_lectura_comision(hoja: str, datos: dict) -> str:
@@ -925,15 +957,15 @@ def validar_paso(p: int, resp: dict) -> list[str]:
         if r_sum > 1:
             errores.append("Solo un distrito puede coincidir con el domicilio del DNI vigente.")
     elif p == 7:
-        curso = resp.get("curso")
-        if not curso:
-            errores.append("Debe seleccionar un Curso o Especialidad.")
+        cursos_sel = resp.get("cursos_seleccionados") or ([resp["curso"]] if resp.get("curso") else [])
+        if not cursos_sel:
+            errores.append("Debe seleccionar al menos una Especialidad o Curso.")
         else:
             dni_limpio = re.sub(r"\D", "", resp.get("dni_txt") or "")
             dni = int(dni_limpio) if dni_limpio else None
-            dups = duplicados(dni, curso)
-            if dups and not resp.get("confirm_dup"):
-                errores.append("Ya existe una carga de este aspirante para este curso. Marque la confirmación.")
+            tiene_dups = any(duplicados(dni, c) for c in cursos_sel)
+            if tiene_dups and not resp.get("confirm_dup"):
+                errores.append("Ya existen cargas para este aspirante en alguna de las especialidades seleccionadas. Marque la confirmación.")
     elif p == 8:
         hab = resp.get("hab")
         if not hab:
@@ -1225,35 +1257,103 @@ def render_paso_7(distritos, cursos):
     ss = st.session_state
     resp = ss.resp
     st.markdown("#### Columna F: Especialidad (Trayecto, Curso y/o Módulo)")
-    idx = cursos.index(resp["curso"]) if resp["curso"] in cursos else None
-    curso = st.selectbox(
-        "Especialidad (Col. F) *",
-        cursos,
-        index=idx,
-        placeholder="Escriba el nombre o código del curso...",
-        key=wk("curso"),
+
+    # 1. Selector de Familia Profesional (Prefijos Catálogo 2027)
+    opciones_familias = ["TODAS LAS FAMILIAS"] + list(ed.FAMILIAS_PROFESIONALES.values())
+    fam_actual = resp.get("familia_filtro", "TODAS LAS FAMILIAS")
+    idx_fam = opciones_familias.index(fam_actual) if fam_actual in opciones_familias else 0
+    fam_sel = st.selectbox(
+        "Familia Profesional (Catálogo 2027)",
+        opciones_familias,
+        index=idx_fam,
+        key=wk("familia_filtro"),
+        disabled=not ss.es_operador,
+        help="Filtra las especialidades del catálogo oficial según su familia profesional.",
+    )
+    if ss.es_operador:
+        resp["familia_filtro"] = fam_sel
+
+    # 2. Multiselect de Especialidades
+    cursos_familia = ed.obtener_cursos_por_familia(fam_sel, cursos)
+    seleccion_previa = resp.get("cursos_seleccionados") or ([] if not resp.get("curso") else [resp["curso"]])
+    # Garantizar que las ya seleccionadas siempre figuren en las opciones para que no se pierdan al cambiar de familia
+    opciones_mostrar = sorted(list(set(cursos_familia + seleccion_previa)))
+
+    cursos_elegidos = st.multiselect(
+        "Especialidades a las que se inscribe el aspirante (seleccione una o varias) *",
+        options=opciones_mostrar,
+        default=[c for c in seleccion_previa if c in opciones_mostrar],
+        placeholder="Seleccione o busque las especialidades...",
+        key=wk("cursos_multiselect"),
         disabled=not ss.es_operador,
     )
     if ss.es_operador:
-        resp["curso"] = curso
-    if resp["curso"]:
-        c = resp["curso"]
-        perfil = na.texto_perfil_nuevo_diseno(c)
-        if perfil:
-            st.info("🔷 " + perfil)
-        tipo = na.tipo_cargo(c)
-        if tipo == "panolero":
-            st.warning("**Pañol (00PA):** solo valen títulos TÉCNICOS. El secundario común no otorga puntaje.")
-        elif tipo == "preceptor":
-            st.info("**Preceptor (00PR):** solo títulos afines a Administración, Docencia, Organización, RRHH o Informática.")
+        resp["cursos_seleccionados"] = cursos_elegidos
+        resp["curso"] = cursos_elegidos[0] if cursos_elegidos else None
+
+    # 3. Desplegable para Agregar / Editar Especialidad Nueva
+    with st.expander("➕ Agregar o Editar Especialidad Nueva (Guardar en Base de Datos)", expanded=False):
+        st.markdown("##### Alta de Nuevo Curso o Trayecto de FP")
+        st.caption("Cree una especialidad que no figure en el catálogo. Se guardará de forma persistente en `salida/cursos_personalizados.json` y se sumará automáticamente a la selección actual.")
+        col_f_pref, col_f_cod, col_f_nom = st.columns([1.5, 1, 2.5])
+        with col_f_pref:
+            pref_nuevo = st.selectbox(
+                "Familia",
+                list(ed.FAMILIAS_PROFESIONALES.keys()),
+                index=list(ed.FAMILIAS_PROFESIONALES.keys()).index("IM") if "IM" in ed.FAMILIAS_PROFESIONALES else 0,
+                format_func=lambda k: f"{k} - {ed.FAMILIAS_PROFESIONALES[k].split(' - ')[-1]}",
+                key=wk("alta_curso_fam"),
+                disabled=not ss.es_operador,
+            )
+        with col_f_cod:
+            cod_nuevo = st.text_input("Código (ej: 31)", key=wk("alta_curso_cod"), placeholder="31", disabled=not ss.es_operador)
+        with col_f_nom:
+            nom_nuevo = st.text_input("Nombre oficial de la especialidad", key=wk("alta_curso_nom"), placeholder="Ej: Especialista en Ciberseguridad", disabled=not ss.es_operador)
+
+        if st.button("💾 Guardar Curso en Base de Datos", key=wk("btn_guardar_nuevo_curso"), disabled=not ss.es_operador, **_ancho(st.button)):
+            if not cod_nuevo.strip() or not nom_nuevo.strip():
+                st.error("Debe ingresar el código numérico y el nombre de la especialidad.")
+            else:
+                cod_comp = f"{pref_nuevo.strip().upper()}{cod_nuevo.strip().upper()}"
+                curso_formateado = f"{cod_comp} - {nom_nuevo.strip()}"
+                ok_alta, msg_alta = ed.agregar_o_editar_curso_personalizado(curso_formateado)
+                if ok_alta:
+                    st.success(msg_alta)
+                    if curso_formateado not in resp.get("cursos_seleccionados", []):
+                        resp.setdefault("cursos_seleccionados", []).append(curso_formateado)
+                        resp["curso"] = resp["cursos_seleccionados"][0]
+                    listas.clear()
+                    st.rerun()
+                else:
+                    st.error(msg_alta)
+
+    # 4. Información de cursos seleccionados y control de duplicados
+    if resp.get("cursos_seleccionados"):
+        st.markdown(f"**Especialidades seleccionadas ({len(resp['cursos_seleccionados'])}):**")
+        for c in resp["cursos_seleccionados"]:
+            tipo = na.tipo_cargo(c)
+            perfil = na.texto_perfil_nuevo_diseno(c)
+            badge_tipo = "🛠️ Pañol" if tipo == "panolero" else ("📋 Preceptor" if tipo == "preceptor" else "🎓 Instructor")
+            st.markdown(f"- **{c}** `{badge_tipo}`" + (f" — *{perfil}*" if perfil else ""))
+
+        tipos_presentes = {na.tipo_cargo(c) for c in resp["cursos_seleccionados"]}
+        if "panolero" in tipos_presentes:
+            st.warning("**Atención Pañol (00PA):** solo valen títulos TÉCNICOS. El secundario común no otorga puntaje.")
+        if "preceptor" in tipos_presentes:
+            st.info("**Atención Preceptor (00PR):** solo títulos afines a Administración, Docencia, Organización, RRHH o Informática.")
 
         limpio = re.sub(r"\D", "", resp.get("dni_txt") or "")
         dni = int(limpio) if limpio else None
-        dups = duplicados(dni, c)
-        if dups:
-            st.warning("⚠️ Ya existe una carga de este aspirante para este curso:\n- " + "\n- ".join(dups))
+        todos_dups = []
+        for c in resp["cursos_seleccionados"]:
+            dups = duplicados(dni, c)
+            if dups:
+                todos_dups.append(f"**{c}**:\n  - " + "\n  - ".join(dups))
+
+        if todos_dups:
+            st.warning("⚠️ Ya existe una carga de este aspirante para las siguientes especialidades:\n" + "\n".join(todos_dups))
             resp["confirm_dup"] = st.checkbox(
-                "Confirmo que deseo cargarlo de todos modos",
+                "Confirmo que deseo cargarlo de todos modos para estas especialidades",
                 value=resp["confirm_dup"],
                 key=wk("confirm_dup"),
                 disabled=not ss.es_operador,
@@ -1321,12 +1421,17 @@ def render_paso_19(distritos, cursos):
 
     st.info("Al guardar, este aspirante pasará a la planilla de **NO MERITUADOS**.")
 
-    # Resumen Zoom/Meet
-    hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
+    # Resumen Zoom/Meet y cursos seleccionados
+    hoja, filas_datos = construir_datos_multiples(resp, ss.distrito_eval, ss.incluir_residencia_ab)
+    n_cursos = len(filas_datos)
+    if n_cursos > 1:
+        st.info(f"📋 **Especialidades que no meritúan a guardar ({n_cursos}):**\n" + "\n".join([f"- {d['especialidad']}" for d in filas_datos]))
+
     st.markdown("##### 🗣️ Resumen de Lectura para la Comisión (Zoom/Meet)")
+    texto_dictamen = "\n\n".join([texto_lectura_comision(hoja, d) for d in filas_datos])
     st.text_area(
         "Dictamen en voz alta:",
-        value=texto_lectura_comision(hoja, datos),
+        value=texto_dictamen,
         height=180,
         key="txt_lectura_zoom_p19",
         disabled=True,
@@ -1338,19 +1443,21 @@ def render_paso_19(distritos, cursos):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("💾 Guardar en NO MERITUADOS y evaluar OTRO curso del MISMO aspirante", disabled=not ss.es_operador, **_ancho(st.button)):
+        lbl1 = f"💾 Guardar {n_cursos} curso(s) en NO MERITUADOS y evaluar OTRO curso del MISMO aspirante" if n_cursos > 1 else "💾 Guardar en NO MERITUADOS y evaluar OTRO curso del MISMO aspirante"
+        if st.button(lbl1, disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los errores antes de guardar.")
             else:
-                guardar(hoja, datos)
+                guardar_multiples(hoja, filas_datos)
                 resetear_curso()
                 st.rerun()
     with c2:
-        if st.button("✅ Guardar en NO MERITUADOS y cargar NUEVO aspirante", type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
+        lbl2 = f"✅ Guardar {n_cursos} curso(s) en NO MERITUADOS y cargar NUEVO aspirante" if n_cursos > 1 else "✅ Guardar en NO MERITUADOS y cargar NUEVO aspirante"
+        if st.button(lbl2, type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los errores antes de guardar.")
             else:
-                guardar(hoja, datos)
+                guardar_multiples(hoja, filas_datos)
                 resetear_aspirante()
                 st.rerun()
 
@@ -1466,43 +1573,61 @@ def render_paso_14(distritos, cursos):
 def render_paso_15(distritos, cursos):
     ss = st.session_state
     resp = ss.resp
-    st.markdown("#### Columna W: Antigüedad en Docencia Oficial")
-    if ss.es_otro_curso and resp["antig_doc"] > 0:
+    st.markdown("#### Columna W: Antigüedad en Docencia Oficial (Ítem 10.7)")
+    if ss.es_otro_curso and resp.get("antig_doc", 0) > 0:
         st.caption("✔ Precargado del curso anterior: confirme o modifique")
-    w_val = st.number_input(
-        "Años lectivos con Certificación de Servicios (Col. W)",
-        min_value=0.0,
-        max_value=60.0,
-        step=0.5,
-        value=float(resp.get("antig_doc", 0.0)),
+    opciones_anios = list(range(11))
+    val_actual = int(min(max(resp.get("antig_doc", 0), 0), 10))
+
+    def _formato_w(a: int) -> str:
+        pts = round(min(a, 10) * 0.25, 2)
+        if a == 10:
+            return f"10 o más años  →  10 × 0.25 = {pts:.2f} pts (Tope máximo)"
+        return f"{a} años  →  {a} × 0.25 = {pts:.2f} pts"
+
+    anios_sel = st.selectbox(
+        "Años lectivos completos con Certificación de Servicios oficial (Col. W):",
+        options=opciones_anios,
+        index=val_actual,
+        format_func=_formato_w,
         key=wk("antig_doc"),
         disabled=not ss.es_operador,
+        help="Solo se acreditan años lectivos completos (0.25 pts por año, máx. 2.50 pts a los 10 años).",
     )
     if ss.es_operador:
-        resp["antig_doc"] = float(w_val)
+        resp["antig_doc"] = anios_sel
     pts = na.puntos_antiguedad_docencia(resp["antig_doc"])
-    st.caption(f"Col. W = **{pts:.2f}** pts ({resp['antig_doc']} años × 0.25, tope {na.TOPE_ANTIG_DOCENCIA:.2f})")
+    st.caption(f"Col. W = **{pts:.2f}** pts ({resp['antig_doc']} años × 0.25, tope {na.TOPE_ANTIG_DOCENCIA:.2f} pts)")
 
 
 def render_paso_16(distritos, cursos):
     ss = st.session_state
     resp = ss.resp
-    st.markdown("#### Columna X: Antigüedad en Ámbito de FP Oficial")
-    if ss.es_otro_curso and resp["antig_fp"] > 0:
+    st.markdown("#### Columna X: Antigüedad en Ámbito de FP Oficial (Ítem 10.8)")
+    if ss.es_otro_curso and resp.get("antig_fp", 0) > 0:
         st.caption("✔ Precargado del curso anterior: confirme o modifique")
-    x_val = st.number_input(
-        "Años lectivos en FP con Certificación de Servicios (Col. X)",
-        min_value=0.0,
-        max_value=60.0,
-        step=0.5,
-        value=float(resp.get("antig_fp", 0.0)),
+    opciones_anios = list(range(11))
+    val_actual = int(min(max(resp.get("antig_fp", 0), 0), 10))
+
+    def _formato_x(a: int) -> str:
+        pts = round(min(a, 10) * 0.50, 2)
+        if a == 10:
+            return f"10 o más años  →  10 × 0.50 = {pts:.2f} pts (Tope máximo)"
+        return f"{a} años  →  {a} × 0.50 = {pts:.2f} pts"
+
+    anios_sel = st.selectbox(
+        "Años lectivos completos en FP con Certificación de Servicios oficial (Col. X):",
+        options=opciones_anios,
+        index=val_actual,
+        format_func=_formato_x,
         key=wk("antig_fp"),
         disabled=not ss.es_operador,
+        help="Solo se acreditan años lectivos completos en FP (0.50 pts por año, máx. 5.00 pts a los 10 años).",
     )
     if ss.es_operador:
-        resp["antig_fp"] = float(x_val)
+        resp["antig_fp"] = anios_sel
     pts = na.puntos_antiguedad_fp(resp["antig_fp"])
-    st.caption(f"Col. X = **{pts:.2f}** pts ({resp['antig_fp']} años × 0.50, tope {na.TOPE_ANTIG_FP:.2f})")
+    st.caption(f"Col. X = **{pts:.2f}** pts ({resp['antig_fp']} años × 0.50, tope {na.TOPE_ANTIG_FP:.2f} pts)")
 
 
 def render_paso_17(distritos, cursos):
@@ -1556,8 +1681,13 @@ def render_paso_18(distritos, cursos):
         st.divider()
 
     st.markdown("##### Resumen y Guardado de la Evaluación")
-    hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
-    calc = na.calcular_ab(datos, ss.distrito_eval, ss.incluir_residencia_ab)
+    hoja, filas_datos = construir_datos_multiples(resp, ss.distrito_eval, ss.incluir_residencia_ab)
+    datos_rep = filas_datos[0] if filas_datos else {}
+    calc = na.calcular_ab(datos_rep, ss.distrito_eval, ss.incluir_residencia_ab)
+
+    n_cursos = len(filas_datos)
+    if n_cursos > 1:
+        st.info(f"📋 **Especialidades seleccionadas a guardar ({n_cursos}):**\n" + "\n".join([f"- {d['especialidad']}" for d in filas_datos]))
 
     r1, r2, r3 = st.columns(3)
     r1.metric("Puntaje Base", f"{calc['base']:.2f}")
@@ -1566,9 +1696,10 @@ def render_paso_18(distritos, cursos):
 
     # Resumen Zoom/Meet
     st.markdown("##### 🗣️ Resumen de Lectura para la Comisión (Zoom/Meet)")
+    texto_dictamen = "\n\n".join([texto_lectura_comision(hoja, d) for d in filas_datos])
     st.text_area(
         "Dictamen en voz alta (copiable o para dictar en la reunión):",
-        value=texto_lectura_comision(hoja, datos),
+        value=texto_dictamen,
         height=200,
         key="txt_lectura_zoom_p18",
         disabled=True,
@@ -1580,19 +1711,21 @@ def render_paso_18(distritos, cursos):
 
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("💾 Guardar y evaluar OTRO curso del MISMO aspirante", disabled=not ss.es_operador, **_ancho(st.button)):
+        lbl1 = f"💾 Guardar {n_cursos} curso(s) y evaluar OTRO curso del MISMO aspirante" if n_cursos > 1 else "💾 Guardar y evaluar OTRO curso del MISMO aspirante"
+        if st.button(lbl1, disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los pasos incompletos antes de guardar.")
             else:
-                guardar(hoja, datos)
+                guardar_multiples(hoja, filas_datos)
                 resetear_curso()
                 st.rerun()
     with c2:
-        if st.button("✅ Guardar y cargar NUEVO aspirante", type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
+        lbl2 = f"✅ Guardar {n_cursos} curso(s) y cargar NUEVO aspirante" if n_cursos > 1 else "✅ Guardar y cargar NUEVO aspirante"
+        if st.button(lbl2, type="primary", disabled=not ss.es_operador, **_ancho(st.button)):
             if errs:
                 st.warning("Corrija los pasos incompletos antes de guardar.")
             else:
-                guardar(hoja, datos)
+                guardar_multiples(hoja, filas_datos)
                 resetear_aspirante()
                 st.rerun()
 
@@ -1623,15 +1756,27 @@ PASOS = {
 # --------------------------------------------------------------------------- #
 # Guardado y Reinicio
 # --------------------------------------------------------------------------- #
-def guardar(hoja: str, datos: dict) -> None:
+def guardar_multiples(hoja: str, filas: list[dict]) -> None:
     ss = st.session_state
-    item = {"id": ss.sig_id, "hoja": hoja, "datos": datos}
-    ss.sig_id += 1
-    ss.registros.append(item)
+    for d in filas:
+        item = {"id": ss.sig_id, "hoja": hoja, "datos": d}
+        ss.sig_id += 1
+        ss.registros.append(item)
     ss.ver_tabla += 1
     dest = "MERITUADOS" if hoja == HOJA_MER else "NO MERITUADOS"
-    ss.flash = f"✅ Curso guardado en {dest}: {datos['apellido']}, {datos['nombres']} – {datos['especialidad']}."
+    n_cursos = len(filas)
+    ap = filas[0].get("apellido", "") if filas else ""
+    nom = filas[0].get("nombres", "") if filas else ""
+    if n_cursos == 1:
+        esp = filas[0].get("especialidad", "")
+        ss.flash = f"✅ Curso guardado en {dest}: {ap}, {nom} – {esp}."
+    else:
+        ss.flash = f"✅ Se guardaron {n_cursos} cursos en {dest} para {ap}, {nom}."
     guardar_disco()
+
+
+def guardar(hoja: str, datos: dict) -> None:
+    guardar_multiples(hoja, [datos])
 
 
 def resetear_curso() -> None:
@@ -1639,7 +1784,9 @@ def resetear_curso() -> None:
     ant = ss.resp
     nuevo = nueva_resp()
     for k in CAMPOS_COMUNES:
-        nuevo[k] = copy.deepcopy(ant[k])
+        if k in ant:
+            nuevo[k] = copy.deepcopy(ant[k])
+    nuevo["familia_filtro"] = ant.get("familia_filtro", "TODAS LAS FAMILIAS")
     ss.resp = nuevo
     ss.ver += 1
     ss.es_otro_curso = True
@@ -1648,7 +1795,9 @@ def resetear_curso() -> None:
 
 def resetear_aspirante() -> None:
     ss = st.session_state
+    fam = ss.resp.get("familia_filtro", "TODAS LAS FAMILIAS") if "resp" in ss else "TODAS LAS FAMILIAS"
     ss.resp = nueva_resp()
+    ss.resp["familia_filtro"] = fam
     ss.ver += 1
     ss.es_otro_curso = False
     ss.paso_actual = 1
@@ -1776,7 +1925,7 @@ def preview_en_vivo() -> None:
     ss = st.session_state
     resp = ss.resp
     st.markdown("#### 1. Vista en tiempo real del aspirante en evaluación")
-    hoja, datos = construir_datos(resp, ss.distrito_eval, ss.incluir_residencia_ab)
+    hoja, filas_datos = construir_datos_multiples(resp, ss.distrito_eval, ss.incluir_residencia_ab)
 
     cols_resaltar_letras = PASOS.get(ss.paso_actual, {}).get("resalta", [])
 
@@ -1785,20 +1934,27 @@ def preview_en_vivo() -> None:
     else:
         cols_cfg = COLS_OFICIALES_MER
 
-    fila = {}
+    filas_preview = []
     cols_nombres = []
     cols_a_estilar = []
     orden_act = _orden_siguiente(hoja)
 
-    for clave, letra, etiqueta in cols_cfg:
-        col_nom = f"{letra} · {etiqueta}"
-        cols_nombres.append(col_nom)
-        val = orden_act if clave == "orden" else datos.get(clave)
-        fila[col_nom] = fmt(val)
-        if letra in cols_resaltar_letras:
-            cols_a_estilar.append(col_nom)
+    for idx_f, datos in enumerate(filas_datos):
+        fila = {}
+        for clave, letra, etiqueta in cols_cfg:
+            col_nom = f"{letra} · {etiqueta}"
+            if idx_f == 0:
+                cols_nombres.append(col_nom)
+            val = (orden_act + idx_f) if clave == "orden" else datos.get(clave)
+            fila[col_nom] = fmt(val)
+            if letra in cols_resaltar_letras and col_nom not in cols_a_estilar:
+                cols_a_estilar.append(col_nom)
+        filas_preview.append(fila)
 
-    df_p = pd.DataFrame([fila], columns=cols_nombres)
+    df_p = pd.DataFrame(filas_preview, columns=cols_nombres)
+
+    if len(filas_datos) > 1:
+        st.info(f"ℹ️ Se están evaluando simultáneamente **{len(filas_datos)} especialidades** para este aspirante.")
 
     if cols_a_estilar:
         styled = df_p.style.set_properties(
@@ -1809,8 +1965,8 @@ def preview_en_vivo() -> None:
     else:
         st.dataframe(df_p, hide_index=True, **_ancho(st.dataframe))
 
-    if hoja == HOJA_MER:
-        calc = na.calcular_ab(datos, ss.distrito_eval, ss.incluir_residencia_ab)
+    if hoja == HOJA_MER and filas_datos:
+        calc = na.calcular_ab(filas_datos[0], ss.distrito_eval, ss.incluir_residencia_ab)
         c1, c2, c3 = st.columns(3)
         c1.metric("Puntaje base (sin residencia)", f"{calc['base']:.2f}")
         c2.metric(
@@ -1818,7 +1974,7 @@ def preview_en_vivo() -> None:
             f"{calc['con_residencia']:.2f}",
             help="Suma 5 pts si algún distrito coincide con el domicilio del DNI vigente.",
         )
-        tiene_res = na.residencia_en_distrito_evaluador(datos, ss.distrito_eval)
+        tiene_res = na.residencia_en_distrito_evaluador(filas_datos[0], ss.distrito_eval)
         ayuda_ab = (
             "Col. AB guarda el puntaje base (sin residencia)."
             if not ss.incluir_residencia_ab
@@ -1895,8 +2051,18 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                 cfg["T · DESEMPEÑO PROFESIONAL – años"] = st.column_config.NumberColumn("T · AÑOS", min_value=0, max_value=35, step=1, format="%d", disabled=deshab)
                 cfg["U · DESEMPEÑO PROFESIONAL – pts"] = st.column_config.NumberColumn("U · DESEMP. PTS", min_value=0, max_value=8, step=1, disabled=deshab)
                 cfg["V · FORMACIÓN SUPERIOR EN FP"] = st.column_config.NumberColumn("V · FORMACIÓN SUPERIOR EN FP", min_value=0, max_value=7, step=7, disabled=deshab)
-                cfg["W · ANTIGÜEDAD DOCENCIA OFICIAL"] = st.column_config.NumberColumn("W · ANTIGÜEDAD DOCENCIA", min_value=0.0, max_value=2.5, step=0.25, format="%.2f", disabled=deshab)
-                cfg["X · ANTIGÜEDAD ÁMBITO FP OFICIAL"] = st.column_config.NumberColumn("X · ANTIGÜEDAD FP", min_value=0.0, max_value=5.0, step=0.5, format="%.2f", disabled=deshab)
+                cfg["W · ANTIGÜEDAD DOCENCIA OFICIAL"] = st.column_config.SelectboxColumn(
+                    "W · ANTIGÜEDAD DOCENCIA",
+                    options=list(na.VALORES_PERMITIDOS_ANTIG_DOCENCIA),
+                    disabled=deshab,
+                    help="Valores oficiales estrictos (múltiplos de 0.25 hasta 2.50)",
+                )
+                cfg["X · ANTIGÜEDAD ÁMBITO FP OFICIAL"] = st.column_config.SelectboxColumn(
+                    "X · ANTIGÜEDAD FP",
+                    options=list(na.VALORES_PERMITIDOS_ANTIG_FP),
+                    disabled=deshab,
+                    help="Valores oficiales estrictos (múltiplos de 0.50 hasta 5.00)",
+                )
                 cfg["Y · CALIFICACIÓN 1"] = st.column_config.NumberColumn("Y · CALIF 1", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", disabled=deshab)
                 cfg["Z · CALIFICACIÓN 2"] = st.column_config.NumberColumn("Z · CALIF 2", min_value=0.0, max_value=1.0, step=0.1, format="%.2f", disabled=deshab)
                 cfg["AA · ART 59 DEL ESTATUTO DOCENTE"] = st.column_config.NumberColumn("AA · ART 59", min_value=0, max_value=10, step=10, disabled=deshab)
@@ -1987,6 +2153,14 @@ def grilla_general(cursos: list[str], distritos: list[str]) -> None:
                         if col_name in col_a_clave:
                             clave = col_a_clave[col_name]
                             nuevo[clave] = val_nuevo
+                            # §13.2.3: Si se edita la Columna F con un curso nuevo, incorporarlo a cursos_personalizados.json
+                            if clave == "especialidad" and val_nuevo:
+                                val_str = str(val_nuevo).strip()
+                                if val_str and val_str not in cursos:
+                                    ok_c, msg_c = ed.agregar_o_editar_curso_personalizado(val_str)
+                                    if ok_c:
+                                        listas.clear()
+                                        todos_avisos.append(f"Se incorporó '{val_str}' a la base de datos de cursos.")
 
                     if hoja == HOJA_MER:
                         norm_datos, avisos = na.normalizar_edicion_meritudo(anterior, nuevo)

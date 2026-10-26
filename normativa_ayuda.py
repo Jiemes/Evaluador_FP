@@ -277,14 +277,103 @@ def calcular_ab(datos: dict, distrito_eval: str | None, incluir_residencia: bool
     return calcular_puntaje(datos, incluye_residencia=usar)
 
 
+# =========================================================================== #
+# Familias Profesionales (Catálogo 2027, §13.1)
+# =========================================================================== #
+FAMILIAS_PROFESIONALES: dict[str, str] = {
+    "00": "00 - Cargos Docentes (Pañol / Preceptor)",
+    "AA": "AA - Actividades Agropecuarias",
+    "AC": "AC - Administración y Comercialización",
+    "AE": "AE - Aeronáutica",
+    "AP": "AP - Actividades Pesqueras",
+    "CC": "CC - Cuero y Calzado",
+    "CS": "CS - Comunicación Social",
+    "EE": "EE - Energía Eléctrica",
+    "EM": "EM - Electromecánica",
+    "ET": "ET - Electrónica",
+    "GH": "GH - Gastronomía / Hotelería y Turismo",
+    "IA": "IA - Industria Alimentaria",
+    "IC": "IC - Industrias Culturales y Creativas",
+    "IG": "IG - Industria Gráfica",
+    "IM": "IM - Informática",
+    "LT": "LT - Logística y Transporte",
+    "MA": "MA - Automotriz",
+    "MC": "MC - Módulos Comunes",
+    "MM": "MM - Madera y Mueble",
+    "MT": "MT - Metalmecánica",
+    "OA": "OA - Oficios Artesanales",
+    "OC": "OC - Construcciones",
+    "PA": "PA - Industria Papelera",
+    "PL": "PL - Industria Plástica",
+    "SC": "SC - Cuidados y Servicios Sociocomunitarios",
+    "SM": "SM - Seguridad y Medio Ambiente",
+    "SP": "SP - Estética Profesional",
+    "SS": "SS - Salud",
+    "TC": "TC - Telecomunicaciones",
+    "TI": "TI - Textil e Indumentaria",
+    "OT": "OT - Otros / Nuevos Cursos",
+}
+
+
+def obtener_prefijo_familia(curso: str | None) -> str:
+    """Devuelve el prefijo de 2 letras del curso (ej: 'IM30 - ...' -> 'IM').
+    Si no coincide con ninguna familia conocida, devuelve 'OT'."""
+    if not curso or len(str(curso).strip()) < 2:
+        return "OT"
+    pref = str(curso).strip()[:2].upper()
+    return pref if pref in FAMILIAS_PROFESIONALES else "OT"
+
+
+def obtener_nombre_familia(curso: str | None) -> str:
+    """Devuelve el nombre completo descriptivo de la familia."""
+    pref = obtener_prefijo_familia(curso)
+    return FAMILIAS_PROFESIONALES.get(pref, FAMILIAS_PROFESIONALES["OT"])
+
+
+# =========================================================================== #
+# Valores y Normalización Estricta de Antigüedad (§13.4)
+# =========================================================================== #
+VALORES_PERMITIDOS_ANTIG_DOCENCIA = (0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5)
+VALORES_PERMITIDOS_ANTIG_FP = (0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0)
+
+
+def normalizar_antiguedad_docencia(valor: float | int | None) -> float:
+    """Redondea al múltiplo de 0.25 más cercano en el rango [0.0, 2.5]."""
+    if valor is None:
+        return 0.0
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0:
+        return 0.0
+    if v >= 2.5:
+        return 2.5
+    return min(VALORES_PERMITIDOS_ANTIG_DOCENCIA, key=lambda x: abs(x - v))
+
+
+def normalizar_antiguedad_fp(valor: float | int | None) -> float:
+    """Redondea al múltiplo de 0.50 más cercano en el rango [0.0, 5.0]."""
+    if valor is None:
+        return 0.0
+    try:
+        v = float(valor)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= 0:
+        return 0.0
+    if v >= 5.0:
+        return 5.0
+    return min(VALORES_PERMITIDOS_ANTIG_FP, key=lambda x: abs(x - v))
+
+
 VALORES_DISCRETOS = {
     "fi": (0, 25), "fe_sec_orient": (0, 3), "fe_sec_tecnico": (0, 5), "fe_superior": (0, 7),
     "fe_universitario": (0, 8), "desemp_pts": (0, 5, 6, 8), "form_sup_fp": (0, 7), "art59": (0, 10),
     "pts_dist1": (0, 5), "pts_dist2": (0, 5), "pts_dist3": (0, 5),
     "calif1": (0.0, 0.1, 0.5, 1.0), "calif2": (0.0, 0.1, 0.5, 1.0),
 }
-TOPES_EDICION = {"cap_docente": TOPE_CAP_DOCENTE, "cap_especifica": TOPE_CAP_ESPECIFICA,
-                 "antig_docencia": TOPE_ANTIG_DOCENCIA, "antig_fp": TOPE_ANTIG_FP}
+TOPES_EDICION = {"cap_docente": TOPE_CAP_DOCENTE, "cap_especifica": TOPE_CAP_ESPECIFICA}
 OBLIGATORIOS_MER = ("dni", "apellido", "nombres", "especialidad", "dist1", "fi")
 OBLIGATORIOS_NO_MER = ("dni", "apellido", "nombres", "especialidad", "dist1", "motivo")
 _CLAVES_FE = ("fe_sec_orient", "fe_sec_tecnico", "fe_superior", "fe_universitario")
@@ -346,6 +435,8 @@ def normalizar_edicion_meritudo(anterior: dict, nuevo: dict) -> tuple[dict, list
         else:
             datos[k] = anterior.get(k)
             avisos.append(f"'{k}' solo admite {list(permitidos)}: se restauró el valor anterior.")
+
+    # Topes continuos para capacitaciones
     for k, tope in TOPES_EDICION.items():
         if k in cambiados:
             try:
@@ -360,6 +451,22 @@ def normalizar_edicion_meritudo(anterior: dict, nuevo: dict) -> tuple[dict, list
             if topado != round(v, 2):
                 avisos.append(f"'{k}' se ajustó al rango 0–{tope:.2f}.")
             datos[k] = topado
+
+    # Antigüedad Docencia Oficial (Col. W): múltiplos de 0.25 hasta 2.50
+    if "antig_docencia" in cambiados:
+        orig = datos.get("antig_docencia")
+        norm_w = normalizar_antiguedad_docencia(orig)
+        datos["antig_docencia"] = norm_w
+        if orig is not None and abs(float(orig or 0) - norm_w) > 1e-6:
+            avisos.append(f"'antig_docencia' se normalizó al valor válido más cercano ({norm_w:.2f} pts).")
+
+    # Antigüedad FP Oficial (Col. X): múltiplos de 0.50 hasta 5.00
+    if "antig_fp" in cambiados:
+        orig = datos.get("antig_fp")
+        norm_x = normalizar_antiguedad_fp(orig)
+        datos["antig_fp"] = norm_x
+        if orig is not None and abs(float(orig or 0) - norm_x) > 1e-6:
+            avisos.append(f"'antig_fp' se normalizó al valor válido más cercano ({norm_x:.2f} pts).")
 
     # Residencia (H, J, L): sin distrito -> sin puntos; con distrito -> 0 ó 5; un solo 5
     for i in (1, 2, 3):
