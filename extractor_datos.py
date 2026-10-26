@@ -34,6 +34,7 @@ DIR_SALIDA = BASE_DIR / "salida"
 RUTA_TRABAJO = DIR_SALIDA / "PLANILLA_TRABAJO.xlsx"
 DIR_BACKUP = DIR_SALIDA / "backup"
 MAX_BACKUPS = 20
+RUTA_CURSOS_PERSONALIZADOS = DIR_SALIDA / "cursos_personalizados.json"
 
 FILA_INICIAL = 9
 HOJA_MER = "MERITUADOS"
@@ -78,8 +79,6 @@ FAMILIAS_PROFESIONALES: dict[str, str] = {
     "TI": "TI - Textil e Indumentaria",
     "OT": "OT - Otros / Nuevos Cursos",
 }
-
-RUTA_CURSOS_PERSONALIZADOS = DIR_SALIDA / "cursos_personalizados.json"
 
 CURSOS_CATALOGO_2027_INICIALES = [
     "AA54 - Armadora/or de Invernáculos",

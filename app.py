@@ -19,9 +19,22 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+import importlib
 import auth_usuarios as au
 import extractor_datos as ed
 import normativa_ayuda as na
+
+# Forzar recarga en caliente de submódulos locales ante reinicios o despliegues en Streamlit Cloud
+try:
+    importlib.reload(au)
+    importlib.reload(ed)
+    importlib.reload(na)
+except Exception:
+    pass
+
+FAMILIAS_PROFESIONALES: dict[str, str] = getattr(
+    ed, "FAMILIAS_PROFESIONALES", getattr(na, "FAMILIAS_PROFESIONALES", {})
+)
 
 # --------------------------------------------------------------------------- #
 # Configuración y constantes de interfaz
@@ -354,14 +367,24 @@ def _al_cambiar_config() -> None:
 # Cache de Excel e información de base
 # --------------------------------------------------------------------------- #
 def _mtime() -> float:
-    t_orig = ed.RUTA_ORIGINAL.stat().st_mtime if ed.RUTA_ORIGINAL.exists() else 0.0
-    t_pers = ed.RUTA_CURSOS_PERSONALIZADOS.stat().st_mtime if ed.RUTA_CURSOS_PERSONALIZADOS.exists() else 0.0
+    try:
+        t_orig = ed.RUTA_ORIGINAL.stat().st_mtime if hasattr(ed, "RUTA_ORIGINAL") and ed.RUTA_ORIGINAL.exists() else 0.0
+    except Exception:
+        t_orig = 0.0
+    try:
+        ruta_pers = getattr(ed, "RUTA_CURSOS_PERSONALIZADOS", None)
+        if ruta_pers is None:
+            ruta_pers = getattr(ed, "DIR_SALIDA", Path(__file__).resolve().parent / "salida") / "cursos_personalizados.json"
+        t_pers = ruta_pers.stat().st_mtime if (hasattr(ruta_pers, "exists") and ruta_pers.exists()) else 0.0
+    except Exception:
+        t_pers = 0.0
     return max(t_orig, t_pers)
 
 
 @st.cache_data(show_spinner="Leyendo cursos y distritos de 'Hoja 2'…")
 def listas(mtime: float) -> tuple[list[str], list[str]]:
-    return ed.cargar_listas(ed.RUTA_ORIGINAL)
+    ruta = getattr(ed, "RUTA_ORIGINAL", Path(__file__).resolve().parent / "PLANILLA DE DATOS DE ASPIRANTES.xlsx")
+    return ed.cargar_listas(ruta)
 
 
 @st.cache_data(show_spinner=False)
@@ -1259,7 +1282,7 @@ def render_paso_7(distritos, cursos):
     st.markdown("#### Columna F: Especialidad (Trayecto, Curso y/o Módulo)")
 
     # 1. Selector de Familia Profesional (Prefijos Catálogo 2027)
-    opciones_familias = ["TODAS LAS FAMILIAS"] + list(ed.FAMILIAS_PROFESIONALES.values())
+    opciones_familias = ["TODAS LAS FAMILIAS"] + list(FAMILIAS_PROFESIONALES.values())
     fam_actual = resp.get("familia_filtro", "TODAS LAS FAMILIAS")
     idx_fam = opciones_familias.index(fam_actual) if fam_actual in opciones_familias else 0
     fam_sel = st.selectbox(
@@ -1299,9 +1322,9 @@ def render_paso_7(distritos, cursos):
         with col_f_pref:
             pref_nuevo = st.selectbox(
                 "Familia",
-                list(ed.FAMILIAS_PROFESIONALES.keys()),
-                index=list(ed.FAMILIAS_PROFESIONALES.keys()).index("IM") if "IM" in ed.FAMILIAS_PROFESIONALES else 0,
-                format_func=lambda k: f"{k} - {ed.FAMILIAS_PROFESIONALES[k].split(' - ')[-1]}",
+                list(FAMILIAS_PROFESIONALES.keys()),
+                index=list(FAMILIAS_PROFESIONALES.keys()).index("IM") if "IM" in FAMILIAS_PROFESIONALES else 0,
+                format_func=lambda k: f"{k} - {FAMILIAS_PROFESIONALES[k].split(' - ')[-1]}",
                 key=wk("alta_curso_fam"),
                 disabled=not ss.es_operador,
             )
