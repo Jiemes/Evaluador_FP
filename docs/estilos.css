@@ -1,18 +1,23 @@
 /* ==========================================================================
    ESTILOS GENERALES - EVALUADOR FP REGION 10 (2027)
    Aplicación Web Estática Pura para GitHub Pages
+   Identidad Oficial: Gobierno PBA DGCyE DFP + Región 10
    ========================================================================== */
 
 :root {
-  --color-header: #0d1e32;
-  --color-header-card: #142a42;
-  --color-primary: #1e40af;
-  --color-primary-hover: #1d4ed8;
-  --color-accent: #0284c7;
-  --color-bg-page: #f1f5f9;
+  --color-header: #0a192f;
+  --color-header-card: #0f2744;
+  --color-provincia-dark: #111827;
+  --color-r10: #1793a6;
+  --color-r10-dark: #0f6b7a;
+  --color-r10-light: #25b3c8;
+  --color-primary: #1793a6;
+  --color-primary-hover: #0f6b7a;
+  --color-accent: #1793a6;
+  --color-bg-page: #f8fafc;
   --color-border: #cbd5e1;
-  --color-live-row: #eff6ff;
-  --color-live-border: #3b82f6;
+  --color-live-row: #f0fdfa;
+  --color-live-border: #1793a6;
   --font-main: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -40,6 +45,123 @@ body {
 
 .bg-card-header {
   background-color: var(--color-header-card) !important;
+}
+
+.bg-r10 {
+  background-color: var(--color-r10) !important;
+  color: #ffffff;
+}
+
+.text-r10 {
+  color: var(--color-r10) !important;
+}
+
+/* Botones principales con el color cian institucional */
+.btn-primary {
+  background-color: var(--color-r10) !important;
+  border-color: var(--color-r10) !important;
+  color: #ffffff !important;
+}
+
+.btn-primary:hover, .btn-primary:focus {
+  background-color: var(--color-r10-dark) !important;
+  border-color: var(--color-r10-dark) !important;
+}
+
+.btn-outline-primary {
+  color: var(--color-r10) !important;
+  border-color: var(--color-r10) !important;
+}
+
+.btn-outline-primary:hover, .btn-outline-primary:focus {
+  background-color: var(--color-r10) !important;
+  border-color: var(--color-r10) !important;
+  color: #ffffff !important;
+}
+
+/* ==========================================================================
+   CABECERA INSTITUCIONAL Y LOGOS OFICIALES (3 BLOQUES)
+   ========================================================================== */
+.header-institucional {
+  min-height: 96px;
+  background-color: var(--color-header) !important;
+  border-bottom: 2px solid var(--color-r10);
+}
+
+.header-bloque-izq {
+  flex: 1 1 320px;
+}
+
+.header-bloque-centro {
+  flex: 2 1 420px;
+}
+
+.header-bloque-der {
+  flex: 1 1 120px;
+}
+
+/* Logo Provincia vertical en caja oscura */
+.logo-provincia-box {
+  background-color: var(--color-provincia-dark);
+  padding: 6px 12px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.logo-provincia-img {
+  height: 85px;
+  width: auto;
+  object-fit: contain;
+}
+
+/* Logo Región 10 en caja blanca */
+.logo-r10-img {
+  height: 75px;
+  width: auto;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+  object-fit: contain;
+  border: 1px solid #e2e8f0;
+}
+
+/* Logos en Encabezado de Modal */
+.logo-provincia-box-sm {
+  background-color: var(--color-provincia-dark);
+  padding: 4px 10px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.logo-provincia-modal {
+  height: 65px;
+  width: auto;
+  object-fit: contain;
+}
+
+.logo-r10-modal-box {
+  background: #ffffff;
+  padding: 3px;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.logo-r10-modal {
+  height: 65px;
+  width: auto;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 /* Tarjetas */
@@ -72,7 +194,7 @@ body {
 
 .nav-pills-custom .nav-link.active {
   color: #ffffff;
-  background-color: var(--color-accent);
+  background-color: var(--color-r10);
 }
 
 /* Fila en vivo */
@@ -109,8 +231,8 @@ body {
 }
 
 .editable-cell:hover {
-  background-color: #dbeafe !important;
-  outline: 1px dashed #3b82f6;
+  background-color: #cffafe !important;
+  outline: 1px dashed var(--color-r10);
 }
 
 .editable-cell::after {
@@ -139,10 +261,10 @@ body {
   padding: 0.2rem 0.3rem;
   height: 100%;
   width: 100%;
-  border: 2px solid var(--color-accent);
+  border: 2px solid var(--color-r10);
   outline: none;
   border-radius: 0;
-  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25);
+  box-shadow: 0 0 0 2px rgba(23, 147, 166, 0.25);
 }
 
 /* Lista de especialidades con checkboxes */
@@ -171,8 +293,8 @@ body {
 }
 
 .especialidad-item:hover {
-  background-color: #e0f2fe;
-  border-color: #7dd3fc;
+  background-color: #cffafe;
+  border-color: #a5f3fc;
 }
 
 .especialidad-item input[type="checkbox"] {
@@ -196,7 +318,7 @@ body {
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--color-r10);
 }
 
 /* Calculadora de cursos en Steps 11 y 12 */

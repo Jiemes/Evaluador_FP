@@ -6,6 +6,9 @@
   <title>Evaluador FP 2027 – Comisión Evaluadora Región 10</title>
   <meta name="description" content="Aplicación web estática para la Comisión Evaluadora de Formación Profesional (Región 10, Buenos Aires) - Listados 2027.">
   
+  <!-- Favicon oficial Región 10 -->
+  <link rel="icon" type="image/jpeg" href="logo_r10.jpg">
+
   <!-- Google Fonts: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -22,45 +25,59 @@
 <body class="bg-light">
 
   <!-- ====================================================================== -->
-  <!-- CABECERA SUPERIOR CENTRADA                                             -->
+  <!-- CABECERA SUPERIOR INSTITUCIONAL (3 BLOQUES: PROVINCIA / CENTRO / R10)  -->
   <!-- ====================================================================== -->
-  <header class="navbar navbar-expand-lg navbar-dark bg-header shadow-sm py-2 px-3 sticky-top">
-    <div class="container-fluid px-0">
+  <header class="navbar navbar-dark bg-header shadow-sm py-2 px-3 sticky-top header-institucional">
+    <div class="container-fluid px-0 d-flex align-items-center justify-content-between flex-wrap gap-3">
       
-      <!-- Marca / Título -->
-      <div class="d-flex align-items-center gap-2">
-        <span class="badge bg-primary fs-6 px-2 py-1"><i class="bi bi-file-earmark-spreadsheet-fill me-1"></i> FP 2027</span>
-        <div>
-          <h1 class="h6 mb-0 text-white fw-bold lh-1">Evaluador FP – Listados 2027</h1>
-          <small class="text-white-50 fs-xs">Comisión Evaluadora Región 10 · DGCyE</small>
+      <!-- EXTREMO IZQUIERDO: Logo Provincia de Buenos Aires + Título Institucional -->
+      <div class="header-bloque-izq d-flex align-items-center gap-3">
+        <div class="logo-provincia-box">
+          <img src="logo_provincia_fp.png" alt="Gobierno de la Provincia de Buenos Aires - DGCyE - Dirección de Formación Profesional" class="logo-provincia-img">
+        </div>
+        <div class="titulo-institucional">
+          <h1 class="h6 mb-1 text-white fw-bold text-uppercase lh-sm">Comisión Evaluadora de Formación Profesional</h1>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-r10 text-white fw-bold px-2 py-1 fs-xs">Listados 2027</span>
+            <span class="text-white-50 fs-xs d-none d-md-inline">Región 10 · DGCyE</span>
+          </div>
         </div>
       </div>
 
-      <!-- Control central: Distrito y cambio -->
-      <div class="d-flex align-items-center gap-2 my-2 my-lg-0 mx-auto">
-        <div class="badge-distrito d-flex align-items-center gap-2 px-3 py-1 bg-dark bg-opacity-50 text-white rounded-pill border border-secondary">
-          <i class="bi bi-geo-alt-fill text-warning"></i>
-          <span id="txt-distrito-activo" class="fw-semibold">Sin distrito seleccionado</span>
+      <!-- CENTRO: Distrito Evaluador (Celda D1), Residencia y Botones de Acción -->
+      <div class="header-bloque-centro d-flex flex-column align-items-center gap-2 mx-auto my-1 my-xl-0">
+        <!-- Fila superior del centro: Distrito activo + Cambiar -->
+        <div class="d-flex align-items-center gap-2 flex-wrap justify-content-center">
+          <div class="badge-distrito d-flex align-items-center gap-2 px-3 py-1 bg-dark bg-opacity-75 text-white rounded-pill border border-info border-opacity-50 shadow-xs">
+            <i class="bi bi-geo-alt-fill text-warning"></i>
+            <span class="text-white-50 fs-xs">Distrito (D1):</span>
+            <span id="txt-distrito-activo" class="fw-bold text-info">Sin distrito seleccionado</span>
+          </div>
+          <button id="btn-cambiar-distrito" class="btn btn-outline-info btn-sm rounded-pill px-3 fw-semibold" title="Cambiar distrito o cargar archivo">
+            <i class="bi bi-arrow-repeat me-1"></i> Cambiar Distrito
+          </button>
         </div>
-        <button id="btn-cambiar-distrito" class="btn btn-outline-light btn-sm rounded-pill px-3" title="Cambiar distrito o cargar archivo">
-          <i class="bi bi-arrow-repeat me-1"></i> Cambiar / Cargar
-        </button>
+
+        <!-- Fila inferior del centro: Checkbox residencia + Descargas -->
+        <div class="d-flex align-items-center gap-2 flex-wrap justify-content-center">
+          <div class="form-check form-switch text-white me-1 mb-0 py-1 px-2 rounded bg-dark bg-opacity-50 border border-secondary border-opacity-50" title="Suma 5 puntos si el domicilio del DNI coincide con el Distrito Evaluador">
+            <input class="form-check-input" type="checkbox" id="chk-incluir-residencia">
+            <label class="form-check-label fs-xs fw-semibold text-warning" for="chk-incluir-residencia">+5 pts Residencia (Col. AB)</label>
+          </div>
+
+          <button id="btn-descargar-xlsx" class="btn btn-success btn-sm fw-bold px-3 shadow-xs" title="Descarga la planilla oficial en formato .xlsx">
+            <i class="bi bi-file-earmark-excel-fill me-1"></i> Descargar Planilla Oficial (.xlsx)
+          </button>
+
+          <button id="btn-descargar-json" class="btn btn-outline-light btn-sm fw-semibold" title="Descarga o carga un respaldo en JSON">
+            <i class="bi bi-cloud-arrow-down me-1"></i> Guardar/Cargar Progreso (.json)
+          </button>
+        </div>
       </div>
 
-      <!-- Controles de la derecha: Checkbox residencia y descargas -->
-      <div class="d-flex align-items-center gap-2 flex-wrap">
-        <div class="form-check form-switch text-white me-2 mb-0" title="Suma 5 puntos si el domicilio del DNI coincide con el Distrito Evaluador">
-          <input class="form-check-input" type="checkbox" id="chk-incluir-residencia">
-          <label class="form-check-label fs-xs fw-semibold" for="chk-incluir-residencia">+5 pts Residencia (Col. AB)</label>
-        </div>
-
-        <button id="btn-descargar-xlsx" class="btn btn-success btn-sm fw-bold px-3 shadow-sm" title="Descarga la planilla oficial en formato .xlsx">
-          <i class="bi bi-file-earmark-excel-fill me-1"></i> Descargar Planilla (.xlsx)
-        </button>
-
-        <button id="btn-descargar-json" class="btn btn-outline-light btn-sm" title="Descarga un respaldo en JSON">
-          <i class="bi bi-download me-1"></i> Respaldo (.json)
-        </button>
+      <!-- EXTREMO DERECHO: Logo Región 10 -->
+      <div class="header-bloque-der d-flex align-items-center justify-content-end">
+        <img src="logo_r10.jpg" alt="Logo Región 10 - GE" class="logo-r10-img">
       </div>
 
     </div>
@@ -332,13 +349,25 @@
     <div class="modal-dialog modal-dialog-centered modal-lg">
       <div class="modal-content shadow-lg border-0">
         
-        <div class="modal-header bg-header text-white py-3">
-          <div class="d-flex align-items-center gap-2">
-            <i class="bi bi-mortarboard-fill fs-4 text-warning"></i>
-            <div>
-              <h5 class="modal-title fw-bold mb-0">Comisión Evaluadora FP – Listados 2027</h5>
-              <small class="text-white-50">Seleccione o cargue la tabulación del distrito para comenzar</small>
+        <div class="modal-header bg-header text-white py-3 px-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
+          <!-- Logo Provincia Izquierda -->
+          <div class="logo-provincia-box-sm">
+            <img src="logo_provincia_fp.png" alt="Gobierno Provincia de Buenos Aires - DGCyE" class="logo-provincia-modal">
+          </div>
+
+          <!-- Título central -->
+          <div class="text-center px-2 flex-grow-1">
+            <h5 class="modal-title fw-bold mb-1 text-white text-uppercase">Comisión Evaluadora de Formación Profesional</h5>
+            <div class="d-flex align-items-center justify-content-center gap-2">
+              <span class="badge bg-r10 text-white px-3 py-1 fs-6 fw-bold">Listados Oficiales 2027</span>
+              <span class="badge bg-secondary fs-xs">Región 10</span>
             </div>
+            <small class="text-white-50 fs-xs d-block mt-1">Dirección General de Cultura y Educación · Dirección de Formación Profesional</small>
+          </div>
+
+          <!-- Logo Región 10 Derecha -->
+          <div class="logo-r10-modal-box">
+            <img src="logo_r10.jpg" alt="Región 10 - GE" class="logo-r10-modal">
           </div>
         </div>
 
