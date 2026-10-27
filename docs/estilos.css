@@ -100,68 +100,47 @@ body {
   flex: 1 1 120px;
 }
 
-/* Logo Provincia vertical en caja oscura */
-.logo-provincia-box {
-  background-color: var(--color-provincia-dark);
-  padding: 6px 12px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-}
-
+/* Logos Oficiales integrados de forma limpia sin fondos (se funden naturalmente con la ventana) */
 .logo-provincia-img {
   height: 85px;
   width: auto;
   object-fit: contain;
+  border-radius: 4px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
 }
 
-/* Logo Región 10 en caja blanca */
 .logo-r10-img {
   height: 75px;
   width: auto;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 4px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
   object-fit: contain;
-  border: 1px solid #e2e8f0;
-}
-
-/* Logos en Encabezado de Modal */
-.logo-provincia-box-sm {
-  background-color: var(--color-provincia-dark);
-  padding: 4px 10px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
 }
 
 .logo-provincia-modal {
-  height: 65px;
+  height: 70px;
   width: auto;
   object-fit: contain;
-}
-
-.logo-r10-modal-box {
-  background: #ffffff;
-  padding: 3px;
-  border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  border-radius: 4px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
 }
 
 .logo-r10-modal {
   height: 65px;
   width: auto;
   object-fit: contain;
-  border-radius: 4px;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
 }
 
 /* Tarjetas */
