@@ -1398,4 +1398,344 @@ En la configuración de columnas de la grilla editable:
 - [ ] En `st.data_editor`, las Columnas W y X son desplegables con valores oficiales estrictos.
 - [ ] La descarga del archivo `.xlsx` inyecta los cursos nuevos en la Columna A de `'Hoja 2'`, manteniendo la validez del libro en Excel y Google Sheets.
 
+---
+
+## 14. Migración a Aplicación Web Estática (HTML/CSS/JS para GitHub Pages)
+
+### 14.1 Propósito y Fundamentos de Arquitectura
+La versión actual de la aplicación basada en Streamlit requiere un entorno de ejecución Python con servidor local o en la nube, reconexiones WebSocket y recargas de página (`st.rerun`). Para garantizar portabilidad absoluta, máxima velocidad de respuesta (60 FPS sin latencia de red), despliegue gratuito e inmediato en **GitHub Pages** (o cualquier servidor estático / apertura directa `file://` en navegador), se define la migración a una **Aplicación Web Estática Pura** alojada en la carpeta `web/`.
+
+#### Principios Clave:
+1. **Zero-Backend (100% Client-Side):** Toda la lógica de cálculo, validación, evaluación de normativa, persistencia y generación de archivos Excel `.xlsx` corre exclusivamente en el motor JavaScript del navegador del usuario.
+2. **Cero Transcripción Manual (Regla de Oro):** Queda terminantemente prohibido duplicar o transcribir a mano en JavaScript los textos normativos de `normativa_ayuda.py`, las listas de cursos o los distritos. Se implementa un script puente en Python (`generar_datos_web.py`) que lee los módulos existentes y compila automáticamente `web/datos.js` y copia `web/plantilla.xlsx`.
+3. **Persistencia Local Segura:** Almacenamiento en `localStorage` por distrito (`evaluador_distrito_<slug>`) y de usuarios (`evaluador_usuarios`), complementado con descarga y carga de archivos `.json` de progreso.
+4. **Exportación Oficial con ExcelJS:** Generación binaria en el navegador del archivo `.xlsx` oficial a partir de `web/plantilla.xlsx`, respetando celdas combinadas, estilos, fórmulas y validaciones.
+
+---
+
+### 14.2 Estructura del Proyecto Web (`web/`)
+
+```
+evaluador_fp_reg10/
+├── ... (código Python existente: extractor_datos.py, normativa_ayuda.py, auth_usuarios.py)
+├── generar_datos_web.py          # Script puente generador (ejecuta en Python)
+└── web/                          # Carpeta lista para GitHub Pages
+    ├── index.html                # Estructura semántica, Bootstrap 5, ExcelJS CDN, modales
+    ├── estilos.css               # Diseño profesional en 3 secciones (100% ancho, sticky headers, inline-edit)
+    ├── plantilla.xlsx            # Copia exacta de PLANILLA DE DATOS DE ASPIRANTES.xlsx
+    ├── datos.js                  # Compilado automático generado por generar_datos_web.py
+    └── app.js                    # Lógica interactiva Vanilla JS (Auth, Wizard 1-18, Tabla en Vivo, ExcelJS)
+```
+
+---
+
+### 14.3 Especificación del Script Puente (`generar_datos_web.py`)
+
+#### 14.3.1 Responsabilidades del Script
+1. **Lectura y Unificación de Datos:**
+   - **Cursos:** Lee los cursos de `'Hoja 2'` de la planilla original más los 14 cursos del Catálogo 2027 (`extractor_datos.obtener_todos_los_cursos()`).
+   - **Familias Profesionales:** Exporta el diccionario `FAMILIAS_PROFESIONALES` (códigos de 2 letras y nombres descriptivos).
+   - **Distritos:** Lee los distritos oficiales de `'Hoja 2'` ordenados con los códigos de la Región 10 primero (`extractor_datos.obtener_distritos()`).
+   - **Ayudas Normativas:** Exporta el diccionario completo `AYUDAS` de `normativa_ayuda.py` con sus títulos, columnas asociadas, normativas citadas y textos completos formateados.
+   - **Perfiles Anexo 2 (Com. 07/2026):** Exporta `PERFILES_NUEVOS_DISENOS` y `_GRUPO_TELECOM`.
+   - **Tablas y Topes de Puntaje:** Exporta `TABLA_CAP_DOCENTE`, `TABLA_CAP_ESPECIFICA`, `TABLA_DESEMPENO`, topes máximos y constantes de puntos.
+   - **Opciones y Motivos:** Exporta `OPCIONES_FORMACION_ESPECIFICA`, `OPCIONES_FORMACION_PANOL`, `OPCIONES_ESCALA_CALIFICACION` y `MOTIVOS_NO_MERITUADO`.
+   - **Usuarios Iniciales:** Exporta los usuarios definidos en `salida/usuarios.json` (o crea por defecto el usuario `admin` con clave inicial `admin2027` y hash SHA-256).
+2. **Copia de la Plantilla Binaria:**
+   - Copia de manera segura `PLANILLA DE DATOS DE ASPIRANTES.xlsx` hacia `web/plantilla.xlsx`.
+3. **Generación de `web/datos.js`:**
+   - Escribe el archivo en formato JavaScript definiendo el objeto global `window.DATOS_APP = { ... };`.
+
+#### 14.3.2 Estructura de `window.DATOS_APP` en `web/datos.js`
+```javascript
+// Archivo generado automáticamente por generar_datos_web.py - NO EDITAR A MANO
+window.DATOS_APP = {
+  version: 1,
+  generado: "2026-10-27T...",
+  distritos: ["067-MARCOS PAZ", "057-GENERAL LAS HERAS", ...],
+  distritosPrioritarios: ["067", "057", "063", "070", "044", "093", "101"],
+  familias: {
+    "00": "00 - Cargos Docentes (Pañol / Preceptor)",
+    "AA": "AA - Actividades Agropecuarias",
+    // ...
+  },
+  cursos: [
+    "00PA - Pañol",
+    "00PR - Preceptor",
+    "AA54 - Armadora/or de Invernáculos",
+    // ...
+  ],
+  cursosIniciales2027: [...],
+  ayudas: {
+    "P1": { "titulo": "DNI y Residencia", "columnas": "C", "normativa": [...], "texto": "..." },
+    // ... todas las ayudas normativas de los pasos 1 a 18 y de habilitación
+  },
+  perfilesAnexo2: [
+    { "nombre": "Usuaria/o de IA Generativa", "resolucion": "RESOC-2026-3756 / IM30", "claves": [["ia generativa"]], "titulos": "...", "oficios": "..." },
+    // ...
+  ],
+  grupoTelecom: { "titulos": "...", "oficios": null },
+  tablasPuntaje: {
+    capDocente: [[5, 10, 0.05], [11, 30, 0.10], [31, 50, 0.15], [51, 70, 0.30], [71, 100, 0.40], [101, null, 0.60]],
+    capEspecifica: [[5, 10, 0.05], [11, 15, 0.10], [16, 20, 0.15], [21, 30, 0.20], [31, null, 0.30]],
+    desempeno: [[0, 2, 0], [3, 4, 5], [5, 9, 6], [10, null, 8]]
+  },
+  topes: {
+    capDocente: 3.00,
+    capEspecifica: 5.00,
+    antigDocencia: 2.50,
+    antigFp: 5.00
+  },
+  puntosFijos: {
+    fi: 25,
+    residencia: 5,
+    formSupFp: 7,
+    art59: 10,
+    ptsXAnioDocencia: 0.25,
+    ptsXAnioFp: 0.50
+  },
+  opcionesFormacion: {
+    "Ninguno / Sin orientación afín": { N: 0, O: 0, P: 0, Q: 0 },
+    "Secundario orientado afín": { N: 3, O: 0, P: 0, Q: 0 },
+    "Secundario Técnico afín": { N: 0, O: 5, P: 0, Q: 0 },
+    "Superior afín": { N: 0, O: 0, P: 7, Q: 0 },
+    "Universitario de grado afín": { N: 0, O: 0, P: 0, Q: 8 }
+  },
+  opcionesFormacionPanol: {
+    "Ninguno / Sin título técnico (secundario común suma 0)": { N: 0, O: 0, P: 0, Q: 0 },
+    "Secundario Técnico": { N: 0, O: 5, P: 0, Q: 0 },
+    "Superior Técnico": { N: 0, O: 0, P: 7, Q: 0 },
+    "Universitario Técnico": { N: 0, O: 0, P: 0, Q: 8 }
+  },
+  opcionesCalificacion: {
+    "9.51 a 10": 1.00,
+    "8 a 9.50": 0.50,
+    "6 a 7.99": 0.10,
+    "Sin calificación": 0.0
+  },
+  motivosNoMerituado: [
+    "No presenta DNI",
+    "No presenta Titulo Secundario",
+    "No presenta Anexo 3",
+    "No Reune Requisitos",
+    "Aspirante Jubilado",
+    "NO ACREDITA ANTECEDENTES PROFESIONALES ESPECÍFICOS",
+    "Otros"
+  ],
+  usuariosIniciales: {
+    "admin": {
+      "username": "admin",
+      "password_hash": "...", // Hash SHA-256 de "admin2027"
+      "nombre": "Administrador General",
+      "rol": "admin",
+      "distritos_permitidos": ["TODOS"]
+    }
+  }
+};
+```
+
+---
+
+### 14.4 Módulo de Autenticación, Roles y Administración de Usuarios en `web/app.js`
+
+#### 14.4.1 Modelo de Autenticación en Cliente
+1. **Almacenamiento de Usuarios:**
+   - La base de datos de usuarios reside en `localStorage.getItem("evaluador_usuarios")`.
+   - Si no existe en el primer inicio, se inicializa automáticamente con `window.DATOS_APP.usuariosIniciales`.
+2. **Cálculo de Hash SHA-256:**
+   - Se utiliza la API nativa del navegador: `crypto.subtle.digest("SHA-256", new TextEncoder().encode(password))`.
+   - Para entornos con protocolo `file://` o navegadores donde `crypto.subtle` esté restringido a contextos seguros (`isSecureContext === false`), se provee una función de hashing SHA-256 en JavaScript puro como salvaguarda infalible.
+3. **Sesión Activa:**
+   - Se guarda en `sessionStorage.getItem("evaluador_sesion_activa")`: `{ username, nombre, rol, distritos_permitidos }`.
+   - Si no hay sesión activa, la app muestra exclusivamente la pantalla de **Login**.
+   - Al loguearse exitosamente, se oculta el login y se revela el dashboard principal con la barra superior de usuario y botón de cerrar sesión.
+
+#### 14.4.2 Modal "⚙️ Administrar Usuarios" (Exclusivo Rol `admin`)
+- Accesible únicamente si el usuario autenticado tiene rol `admin` (`admin2027`).
+- **Listado y Edición:** Permite ver la lista de usuarios, crear un nuevo usuario, editar nombre, cambiar contraseña y asignar distritos permitidos (checklist con los distritos disponibles o selector de `"TODOS"`).
+- **Exportar `usuarios.json`:** Descarga en el navegador un archivo `.json` con la nómina de usuarios y sus hashes.
+- **Importar `usuarios.json`:** Permite subir un archivo JSON para actualizar los usuarios en `localStorage` (útil para sincronizar usuarios creados en otras máquinas).
+
+---
+
+### 14.5 Cabecera Superior Centrada y Persistencia por Distrito
+
+#### 14.5.1 Controles de la Cabecera
+1. **Selector de Distrito Evaluador:**
+   - Filtrado según los permisos del usuario logueado (`distritos_permitidos`). Si tiene `"TODOS"`, muestra toda la lista priorizada de la Región 10.
+   - Al cambiar de distrito, el sistema conmuta automáticamente los registros activos cargando desde `localStorage` la clave `evaluador_distrito_<slug>`.
+2. **Checkbox de Residencia (+5 pts):**
+   - Checkbox: `"Incluir +5 pts de residencia del Distrito Evaluador en Columna AB"`.
+   - Estado guardado por distrito. Si está tildado, la Columna AB suma los 5 puntos al aspirante si su domicilio coincide con el distrito evaluador activo. Si no está tildado, Columna AB refleja el puntaje base.
+3. **Persistencia Automática Local:**
+   - Cada alta, edición o baja de registro se sincroniza instantáneamente en `localStorage` con la estructura:
+     ```json
+     {
+       "distrito": "067-MARCOS PAZ",
+       "merituados": [ ... ],
+       "no_merituados": [ ... ],
+       "cursos_personalizados": [ ... ],
+       "incluir_residencia": false,
+       "ultima_modificacion": "2026-10-27T..."
+     }
+     ```
+4. **Botones de Respaldo Offline:**
+   - **"💾 Guardar Progreso (.json)":** Descarga directa de `progreso_<slug_distrito>.json`.
+   - **"📂 Cargar Progreso (.json)":** Selector de archivo con lectura `FileReader` que restaura los aspirantes evaluados para ese distrito.
+
+#### 14.5.2 Generación y Descarga de Planilla Oficial (`ExcelJS`)
+- **Botón "📥 Descargar Planilla Oficial (.xlsx para Google Sheets)":**
+  1. Descarga en memoria `web/plantilla.xlsx` como `ArrayBuffer` mediante `fetch()`.
+  2. Carga el libro con `new ExcelJS.Workbook()` y `workbook.xlsx.load(buffer)`.
+  3. Escribe en ambas hojas (`MERITUADOS` y `NO MERITUADOS`) la celda `D1` con el formato exacto del distrito evaluador: `Reg 10 Distrito: <distrito>`.
+  4. Inserta las filas de `MERITUADOS` a partir de la fila 9, escribiendo cada valor en su columna correspondiente (A a AB) conservando estilos originales, bordes y fuentes.
+  5. Inserta las filas de `NO MERITUADOS` a partir de la fila 9 (columnas A a K).
+  6. Si existen cursos nuevos o personalizados dados de alta por el usuario, los agrega al final de la Columna A en `'Hoja 2'`, actualizando el rango de opciones válidas para listas desplegables.
+  7. Exporta el libro con `workbook.xlsx.writeBuffer()` y genera la descarga con nombre `PLANILLA_EVALUADA_<slug_distrito>_<timestamp>.xlsx`.
+  8. El archivo resultante es 100% nativo, con formato intacto, compatible de inmediato con Google Sheets y Microsoft Excel.
+
+---
+
+### 14.6 Interfaz de Usuario Dividida en Tres Secciones (Layout & UX)
+
+El contenedor principal ocupa el 100% del ancho de pantalla (`container-fluid`) con una distribución balanceada:
+
+```
++----------------------------------------------------------------------------------------------------+
+|                                    CABECERA SUPERIOR CENTRADA                                      |
+|  Distrito: [ 067-MARCOS PAZ v ]   [x] Incluir +5 pts   [📥 Descargar .xlsx] [💾 Guardar] [📂 Cargar] |
++--------------------------------------------------+-------------------------------------------------+
+|      SECCIÓN SUPERIOR IZQUIERDA (50% ancho)      |      SECCIÓN SUPERIOR DERECHA (50% ancho)       |
+|            Asistente Guiado (Pasos 1 al 18)      |           Ayuda Normativa y Perfiles Anexo 2    |
+|  - Barra de Progreso y Paso Actual               |  - Marco Legal (Dispo 13/25, Com 07/26)        |
+|  - Pregunta Activa y Controles Validados        |  - Texto Explicativo y Ejemplos Oficiales       |
+|  - Calculadoras de Horas (Col. R y S)            |  - Equivalencias de Títulos Nuevos Diseños 2027 |
+|  - Años de Antigüedad Estrictos (Col. W y X)     |                                                 |
+|  - [⬅️ Anterior]  [Siguiente ➡️]                  |                                                 |
++--------------------------------------------------+-------------------------------------------------+
+|                                SECCIÓN INFERIOR (100% ancho)                                       |
+|                                    PLANILLA EN VIVO                                                |
+|  [Fila en vivo del aspirante que se está evaluando actualmente: Col A ... Col AB]                  |
+|  ------------------------------------------------------------------------------------------------  |
+|  Pestañas: [ 📋 MERITUADOS (N) ]  [ ⚠️ NO MERITUADOS (M) ]          [ 🔍 Buscar por DNI/Apellido ] |
+|  Tabla completa con Cabeceras Fijas (Sticky Header) y Edición Directa al Clic en Celdas            |
++----------------------------------------------------------------------------------------------------+
+```
+
+#### 14.6.1 Sección Superior Izquierda: Asistente Guiado Paso a Paso (Pasos 1 al 18)
+- Flujo secuencial reactivo con validación instantánea antes de avanzar:
+  * **Paso 1 (DNI - Col. C):** Entrada numérica limpia, sin puntos ni comas.
+  * **Paso 2 (Apellido - Col. D):** Entrada de texto, mayúsculas automáticas.
+  * **Paso 3 (Nombres - Col. E):** Entrada de texto, mayúsculas automáticas.
+  * **Pasos 4, 5 y 6 (Distritos 1, 2 y 3 - Cols. G a L):**
+    - Selectores de los 3 distritos declarados por el aspirante.
+    - Checkbox o selector automático para asignar los 5 puntos de residencia únicamente al distrito que coincide con el DNI vigente (los demás quedan en 0 automáticamente).
+  * **Paso 7 (Especialidad / Cursos - Col. F):**
+    - Selector de **Familia Profesional** (filtra la lista con los prefijos del Catálogo 2027: IM, AA, MT, etc.).
+    - Selector múltiple con checkboxes: permite seleccionar **varias especialidades a la vez** para el mismo aspirante, repitiendo la valoración de antecedentes sin reescribir todo el legajo.
+    - Modal/formulario **"➕ Agregar / Editar Especialidad"**: permite cargar código y denominación de un curso no catalogado, incorporándolo a la lista y seleccionándolo inmediatamente.
+  * **Paso 8 (Filtro de Habilitación):**
+    - Preguntas de requisitos comunes (Inciso 3: Anexo 3, DNI ambas caras, Título secundario/superior).
+    - Para instructores, preguntas del Inciso 6 (Vía 6.1: experiencia laboral + título/350hs; o Vía 6.2: idoneidad estratégica / 2 dictados completos / curso en certificado FI).
+    - Si no cumple los requisitos, deriva al **Paso 19 ("NO MERITÚA")** con selección de motivo y observaciones obligatorias si es "Otros".
+  * **Paso 9 (Certificado FI - Cols. B y M):**
+    - ¿Posee certificado de FI registrado? Sí (25 pts -> **LISTADO PRINCIPAL**) o No (0 pts -> **LISTADO COMPLEMENTARIO**).
+  * **Paso 10 (Formación Específica - Cols. N a Q):**
+    - Radio buttons excluyentes: Ninguno (0), Secundario orientado (3), Secundario Técnico (5), Superior (7), Universitario (8).
+    - Si el curso seleccionado es Pañolero (`00PA`), solo otorga puntos a títulos técnicos (secundario común suma 0).
+  * **Paso 11 (Capacitación Docente - Col. R):**
+    - Calculadora integrada: el evaluador ingresa cursos en horas reloj u horas cátedra (`hs_reloj = trunc(hs_catedra * 2 / 3)`).
+    - Aplica la escala oficial de la Disposición 13/2025 y aplica el tope estricto de **3.00 pts**.
+  * **Paso 12 (Capacitación Específica - Col. S):**
+    - Calculadora integrada por tramos de horas reloj/cátedra con tope estricto de **5.00 pts**.
+  * **Paso 13 (Desempeño Profesional - Cols. T y U):**
+    - Entrada de años laborales acreditados (0 a 35).
+    - Asigna automáticamente los puntos en Col. U: 0-2 años = 0; 3-4 años = 5; 5-9 años = 6; 10+ años = 8.
+  * **Paso 14 (Formación Superior en FP - Col. V):**
+    - ¿Posee Tecnicatura Superior/Universitaria en FP con validez nacional? Sí (7 pts) o No (0 pts).
+  * **Paso 15 (Antigüedad en Docencia Oficial - Col. W):**
+    - Selector cerrado de años lectivos enteros: `0, 1, 2, ..., 10 o más`.
+    - Cálculo estricto: `años * 0.25` (tope **2.50 pts**). Prohibidos decimales no estándar.
+  * **Paso 16 (Antigüedad en Ámbito de FP - Col. X):**
+    - Selector cerrado de años lectivos enteros: `0, 1, 2, ..., 10 o más`.
+    - Cálculo estricto: `años * 0.50` (tope **5.00 pts**). Prohibidos decimales no estándar.
+  * **Paso 17 (Calificaciones de los Últimos 2 Años en FP - Cols. Y y Z):**
+    - Selectores para Año 1 y Año 2 con opciones oficiales: `9.51 a 10 (1.00 pt)`, `8 a 9.50 (0.50 pt)`, `6 a 7.99 (0.10 pt)`, `Menos de 6 / Sin calificación (0.00 pt)`.
+  * **Paso 18 (Art. 59 Estatuto Docente - Col. AA) y Cierre:**
+    - ¿Posee cargos u horas titulares? No posee titulares = **10 pts**; Posee titulares = **0 pts**.
+    - Cálculo en tiempo real del puntaje de la Columna AB.
+    - Botones de acción final:
+      * **"🗣️ Resumen para leer en Zoom/Meet":** Abre modal con texto estructurado para lectura rápida en la comisión evaluadora (DNI, Nombre, Cursos, Listado, Desglose de puntajes y Total).
+      * **"➕ Evaluar otra Familia/Curso del MISMO Aspirante":** Guarda las filas evaluadas y resetea el wizard al Paso 7, conservando datos filiatorios, distritos y probanzas comunes.
+      * **"👤 Nuevo Aspirante":** Guarda todas las filas evaluadas y limpia el formulario completo para iniciar un legajo nuevo.
+
+#### 14.6.2 Sección Superior Derecha: Panel de Ayuda, Reglamentación y Perfiles
+- Sincronización bidireccional inmediata con el paso visible en la sección izquierda.
+- Muestra:
+  * Encabezado con título del paso y columnas de la planilla impactadas.
+  * Artículos y normativas aplicables (Disposición 13/2025, Comunicación 07/2026, Estatuto Docente).
+  * Texto explicativo con ejemplos prácticos de casos válidos y no válidos.
+  * **Tarjeta de Nuevos Diseños (Anexo 2 Com. 07/2026):** Si el curso seleccionado coincide con alguno de los diseños aprobados (ej. `IA Generativa`, `Fibra Óptica`, `Podador Frutícola`, `Promotor de Cooperativas`, etc.), despliega automáticamente la lista de títulos y oficios habilitados para que el evaluador no tenga que consultar archivos externos.
+
+#### 14.6.3 Sección Inferior: Planilla en Vivo y Grilla Interactiva Editable
+1. **Fila en Vivo del Aspirante Actual:**
+   - Barra superior que refleja en tiempo real cómo se compondrá la fila en la planilla oficial (Columnas A a AB) a medida que el evaluador selecciona opciones o tipea valores.
+2. **Tabla Completa del Distrito:**
+   - Pestañas independientes: **`MERITUADOS (<total>)`** y **`NO MERITUADOS (<total>)`**.
+   - Buscador instantáneo con filtrado reactivo por DNI, Apellido o Especialidad.
+   - Cabeceras fijas (`sticky header`) para navegación fluida con decenas de registros.
+3. **Edición Directa en Celda (Inline Editing):**
+   - El evaluador puede hacer clic sobre cualquier celda de la tabla para editarla sin volver al asistente:
+     * Celdas de texto (DNI, Apellido, Nombre, Observaciones): se convierten en input editable.
+     * Celdas de puntaje con valores discretos (Formación, FI, Antigüedad Docente 0.25, Antigüedad FP 0.50, Calificaciones, Art. 59, Residencia): se convierten en selector desplegable con las únicas opciones válidas según normativa.
+     * Al confirmar la edición (Enter o blur), se valida el dato y **se recalcula inmediatamente la Columna AB** de esa fila, guardando el cambio en `localStorage`.
+   - Botón de eliminación por fila con modal de confirmación rápida.
+
+---
+
+### 14.7 Plan de Implementación para el Próximo Turno
+
+En el siguiente turno, el modelo liviano generará los 4 archivos de la solución:
+1. `generar_datos_web.py`
+   - Script ejecutable en consola Python.
+   - Importa `extractor_datos`, `normativa_ayuda` y `auth_usuarios`.
+   - Crea el directorio `web/` si no existe.
+   - Copia `PLANILLA DE DATOS DE ASPIRANTES.xlsx` hacia `web/plantilla.xlsx`.
+   - Genera `web/datos.js` con el objeto global `window.DATOS_APP`.
+2. `web/index.html`
+   - Estructura HTML5 moderna con enlaces a Bootstrap 5 CSS/JS y `ExcelJS` (CDN jsDelivr).
+   - Estructura semántica de las 3 secciones (superior izq, superior der, inferior).
+   - Modales: Login, Administrar Usuarios, Agregar Curso Nuevo, Resumen Zoom/Meet.
+3. `web/estilos.css`
+   - Variables CSS para paleta institucional, tipografía moderna legible, 100% de ancho de pantalla.
+   - Cabecera fija, tarjetas con sombras suaves, scrollbars estilizadas.
+   - Estilos para celdas editables (`.editable-cell`), estados hover y alertas visuales.
+4. `web/app.js`
+   - Módulo JS autocontenido:
+     * Inicialización de datos y autenticación (SHA-256 + sesión).
+     * Gestión de usuarios y distritos.
+     * Máquina de estados del asistente (Pasos 1 al 18 y Paso 19).
+     * Calculadoras de carga horaria e inferencia de perfiles del Anexo 2.
+     * Renderizador y buscador de la planilla en vivo.
+     * Controlador de edición inline con validaciones y recálculo instantáneo.
+     * Exportador binario con `ExcelJS` sobre `plantilla.xlsx`.
+
+---
+
+### 14.8 Criterios de Aceptación y Pruebas del §14
+- [ ] El script `python generar_datos_web.py` se ejecuta sin errores, genera `web/datos.js` y copia `web/plantilla.xlsx`.
+- [ ] `web/datos.js` contiene todos los cursos oficiales, familias profesionales, distritos, ayudas de los 18 pasos, perfiles de nuevos diseños y usuarios iniciales.
+- [ ] La aplicación web carga correctamente en cualquier navegador sin dependencias de servidor Python (100% cliente).
+- [ ] El sistema de login valida credenciales con hash SHA-256; el usuario `admin` (`admin2027`) puede gestionar usuarios, contraseñas y permisos de distrito.
+- [ ] El evaluador puede seleccionar su distrito y la selección de distritos se ajusta a sus permisos.
+- [ ] El asistente de los 18 pasos guía la carga pregunta a pregunta; en el Paso 7 permite filtrar por familia profesional y marcar múltiples especialidades a la vez.
+- [ ] Las calculadoras de capacitación docente y específica computan horas reloj/cátedra respetando los topes oficiales (3.00 y 5.00).
+- [ ] Los selectores de antigüedad docente (Col. W) y FP (Col. X) solo admiten años enteros y aplican múltiplos estrictos (0.25 y 0.50).
+- [ ] El panel superior derecho muestra la ayuda y perfiles del Anexo 2 sincronizados en tiempo real con el paso actual.
+- [ ] La fila en vivo y la tabla inferior reflejan instantáneamente los datos cargados.
+- [ ] Cualquier celda de la tabla inferior es editable al hacer clic, con opciones validadas y recálculo automático de la Columna AB.
+- [ ] El progreso se guarda automáticamente en `localStorage` y se puede exportar/importar en formato `.json`.
+- [ ] El botón de descarga oficial utiliza `ExcelJS` para inyectar los datos en `web/plantilla.xlsx`, actualizando `D1`, las hojas `MERITUADOS` / `NO MERITUADOS` desde la fila 9 y `'Hoja 2'`, generando un archivo `.xlsx` válido para Excel y Google Sheets.
+
+
 

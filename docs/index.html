@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Evaluador FP 2027 – Comisión Evaluadora Región 10</title>
+  <meta name="description" content="Aplicación web estática para la Comisión Evaluadora de Formación Profesional (Región 10, Buenos Aires) - Listados 2027.">
+  
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Bootstrap 5 CSS -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+  
+  <!-- Estilos propios -->
+  <link rel="stylesheet" href="estilos.css">
+</head>
+<body class="bg-light">
+
+  <!-- ====================================================================== -->
+  <!-- CABECERA SUPERIOR CENTRADA                                             -->
+  <!-- ====================================================================== -->
+  <header class="navbar navbar-expand-lg navbar-dark bg-header shadow-sm py-2 px-3 sticky-top">
+    <div class="container-fluid px-0">
+      
+      <!-- Marca / Título -->
+      <div class="d-flex align-items-center gap-2">
+        <span class="badge bg-primary fs-6 px-2 py-1"><i class="bi bi-file-earmark-spreadsheet-fill me-1"></i> FP 2027</span>
+        <div>
+          <h1 class="h6 mb-0 text-white fw-bold lh-1">Evaluador FP – Listados 2027</h1>
+          <small class="text-white-50 fs-xs">Comisión Evaluadora Región 10 · DGCyE</small>
+        </div>
+      </div>
+
+      <!-- Control central: Distrito y cambio -->
+      <div class="d-flex align-items-center gap-2 my-2 my-lg-0 mx-auto">
+        <div class="badge-distrito d-flex align-items-center gap-2 px-3 py-1 bg-dark bg-opacity-50 text-white rounded-pill border border-secondary">
+          <i class="bi bi-geo-alt-fill text-warning"></i>
+          <span id="txt-distrito-activo" class="fw-semibold">Sin distrito seleccionado</span>
+        </div>
+        <button id="btn-cambiar-distrito" class="btn btn-outline-light btn-sm rounded-pill px-3" title="Cambiar distrito o cargar archivo">
+          <i class="bi bi-arrow-repeat me-1"></i> Cambiar / Cargar
+        </button>
+      </div>
+
+      <!-- Controles de la derecha: Checkbox residencia y descargas -->
+      <div class="d-flex align-items-center gap-2 flex-wrap">
+        <div class="form-check form-switch text-white me-2 mb-0" title="Suma 5 puntos si el domicilio del DNI coincide con el Distrito Evaluador">
+          <input class="form-check-input" type="checkbox" id="chk-incluir-residencia">
+          <label class="form-check-label fs-xs fw-semibold" for="chk-incluir-residencia">+5 pts Residencia (Col. AB)</label>
+        </div>
+
+        <button id="btn-descargar-xlsx" class="btn btn-success btn-sm fw-bold px-3 shadow-sm" title="Descarga la planilla oficial en formato .xlsx">
+          <i class="bi bi-file-earmark-excel-fill me-1"></i> Descargar Planilla (.xlsx)
+        </button>
+
+        <button id="btn-descargar-json" class="btn btn-outline-light btn-sm" title="Descarga un respaldo en JSON">
+          <i class="bi bi-download me-1"></i> Respaldo (.json)
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ====================================================================== -->
+  <!-- CONTENEDOR PRINCIPAL                                                   -->
+  <!-- ====================================================================== -->
+  <main class="container-fluid px-3 py-3">
+
+    <!-- FILA SUPERIOR: WIZARD DE PREGUNTAS (IZQ) Y AYUDA NORMATIVA (DER) -->
+    <div class="row g-3 mb-3">
+      
+      <!-- SECCIÓN SUPERIOR IZQUIERDA: ASISTENTE PASO A PASO (1 al 18) -->
+      <div class="col-lg-6 col-12 d-flex flex-column">
+        <div class="card card-seccion shadow-sm h-100 border-0">
+          <div class="card-header bg-card-header text-white d-flex align-items-center justify-content-between py-2 px-3">
+            <div class="d-flex align-items-center gap-2">
+              <span id="badge-paso" class="badge bg-warning text-dark fw-bold">Paso 1 de 18</span>
+              <h2 id="titulo-paso" class="h6 mb-0 text-white fw-bold">DNI del Aspirante</h2>
+            </div>
+            <span id="badge-columna" class="badge bg-secondary">Columna C</span>
+          </div>
+
+          <!-- Barra de Progreso del Wizard -->
+          <div class="progress rounded-0" style="height: 5px;">
+            <div id="barra-progreso-paso" class="progress-bar bg-warning progress-bar-striped progress-bar-animated" role="progressbar" style="width: 5.5%;"></div>
+          </div>
+
+          <!-- Cuerpo interactivo del paso -->
+          <div class="card-body p-3 d-flex flex-column justify-content-between" style="min-height: 380px;">
+            <div id="contenedor-paso-dinamico">
+              <!-- Se inyecta dinámicamente según el paso actual -->
+            </div>
+
+            <!-- Botonera de Navegación del Paso -->
+            <div class="pt-3 border-top d-flex align-items-center justify-content-between gap-2 mt-auto">
+              <button id="btn-paso-anterior" class="btn btn-outline-secondary px-3" disabled>
+                <i class="bi bi-arrow-left me-1"></i> Anterior
+              </button>
+
+              <div id="contenedor-acciones-finales" class="d-none d-flex align-items-center gap-2 flex-wrap">
+                <button id="btn-resumen-zoom" class="btn btn-outline-primary btn-sm fw-bold">
+                  <i class="bi bi-megaphone-fill me-1"></i> Resumen Zoom/Meet
+                </button>
+                <button id="btn-evaluar-otro-curso" class="btn btn-info btn-sm text-white fw-bold" title="Evaluar otro curso conservando datos filiatorios y de antigüedad">
+                  <i class="bi bi-plus-circle me-1"></i> Otro Curso Mismo Aspirante
+                </button>
+                <button id="btn-guardar-nuevo-aspirante" class="btn btn-success btn-sm fw-bold">
+                  <i class="bi bi-person-plus-fill me-1"></i> Nuevo Aspirante
+                </button>
+              </div>
+
+              <button id="btn-paso-siguiente" class="btn btn-primary px-4 fw-bold">
+                Siguiente <i class="bi bi-arrow-right ms-1"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SECCIÓN SUPERIOR DERECHA: AYUDA NORMATIVA Y ANEXO 2 -->
+      <div class="col-lg-6 col-12 d-flex flex-column">
+        <div class="card card-seccion shadow-sm h-100 border-0">
+          <div class="card-header bg-card-header text-white d-flex align-items-center justify-content-between py-2 px-3">
+            <div class="d-flex align-items-center gap-2">
+              <i class="bi bi-journal-text text-info"></i>
+              <h2 class="h6 mb-0 text-white fw-bold">Reglamentación Oficial y Criterios</h2>
+            </div>
+            <span id="badge-ayuda-normativa" class="badge bg-info text-dark">Disposición 13/2025</span>
+          </div>
+
+          <div class="card-body p-3 overflow-auto" style="max-height: 440px;" id="contenedor-ayuda-scroll">
+            <div id="contenedor-ayuda-dinamica">
+              <!-- Se inyecta la ayuda sincronizada con el paso actual -->
+            </div>
+
+            <!-- Tarjeta destacada de Nuevo Diseño Anexo 2 (si aplica) -->
+            <div id="tarjeta-anexo2" class="alert alert-warning mt-3 d-none border-warning shadow-sm">
+              <h6 class="alert-heading fw-bold mb-1"><i class="bi bi-star-fill text-warning me-1"></i> Nuevo Diseño Curricular 2026/2027 (Anexo 2 Com. 07/2026)</h6>
+              <div id="detalle-anexo2" class="small"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SECCIÓN INFERIOR: PLANILLA EN VIVO (FILA ACTUAL Y TABLA COMPLETA) -->
+    <div class="row g-3">
+      <div class="col-12">
+        <div class="card card-seccion shadow-sm border-0">
+          
+          <!-- Cabecera de la tabla inferior -->
+          <div class="card-header bg-card-header text-white d-flex align-items-center justify-content-between flex-wrap gap-2 py-2 px-3">
+            <div class="d-flex align-items-center gap-3">
+              <h2 class="h6 mb-0 text-white fw-bold"><i class="bi bi-table me-2"></i> Planilla Oficial en Vivo</h2>
+              
+              <!-- Pestañas de MERITUADOS y NO MERITUADOS -->
+              <ul class="nav nav-pills nav-pills-custom" id="pills-tab" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link active py-1 px-3 fs-xs fw-bold" id="pills-mer-tab" data-bs-toggle="pill" data-bs-target="#pills-mer" type="button" role="tab">
+                    <i class="bi bi-check-circle-fill text-success me-1"></i> MERITUADOS (<span id="cont-mer">0</span>)
+                  </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link py-1 px-3 fs-xs fw-bold" id="pills-nomer-tab" data-bs-toggle="pill" data-bs-target="#pills-nomer" type="button" role="tab">
+                    <i class="bi bi-exclamation-triangle-fill text-danger me-1"></i> NO MERITUADOS (<span id="cont-nomer">0</span>)
+                  </button>
+                </li>
+              </ul>
+            </div>
+
+            <!-- Buscador en tiempo real -->
+            <div class="input-group input-group-sm" style="max-width: 320px;">
+              <span class="input-group-text bg-dark border-secondary text-white-50"><i class="bi bi-search"></i></span>
+              <input type="text" id="input-buscar-tabla" class="form-control bg-dark text-white border-secondary" placeholder="Buscar por DNI, Apellido o Curso...">
+              <button id="btn-limpiar-busqueda" class="btn btn-outline-secondary" type="button"><i class="bi bi-x-lg"></i></button>
+            </div>
+          </div>
+
+          <div class="card-body p-3">
+            
+            <!-- Fila en vivo del aspirante que se está evaluando actualmente -->
+            <div class="mb-3">
+              <div class="d-flex align-items-center justify-content-between mb-1">
+                <span class="badge bg-primary text-white fw-semibold fs-xs">
+                  <i class="bi bi-broadcast me-1"></i> Fila en evaluación en tiempo real (Aspirante actual)
+                </span>
+                <span class="text-muted fs-xs">Los valores se actualizan al instante mientras responde cada pregunta</span>
+              </div>
+              <div class="table-responsive border rounded bg-white shadow-xs">
+                <table class="table table-sm table-bordered mb-0 text-center align-middle font-monospace fs-xs table-live">
+                  <thead class="table-light text-muted">
+                    <tr>
+                      <th title="Orden">A</th>
+                      <th title="Listado">B</th>
+                      <th title="DNI">C</th>
+                      <th title="Apellido">D</th>
+                      <th title="Nombres">E</th>
+                      <th title="Especialidad">F</th>
+                      <th title="Distrito 1">G</th>
+                      <th title="Pts Dist 1">H</th>
+                      <th title="Distrito 2">I</th>
+                      <th title="Pts Dist 2">J</th>
+                      <th title="Distrito 3">K</th>
+                      <th title="Pts Dist 3">L</th>
+                      <th title="FI">M</th>
+                      <th title="Sec Orient">N</th>
+                      <th title="Sec Téc">O</th>
+                      <th title="Sup">P</th>
+                      <th title="Univ">Q</th>
+                      <th title="Cap Doc">R</th>
+                      <th title="Cap Esp">S</th>
+                      <th title="Años Desemp">T</th>
+                      <th title="Pts Desemp">U</th>
+                      <th title="Form Sup FP">V</th>
+                      <th title="Antig Doc">W</th>
+                      <th title="Antig FP">X</th>
+                      <th title="Calif 1">Y</th>
+                      <th title="Calif 2">Z</th>
+                      <th title="Art 59">AA</th>
+                      <th title="Puntaje Total" class="table-primary fw-bold text-primary">AB</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr id="fila-en-vivo-tr">
+                      <!-- Renderizado reactivo de la fila activa -->
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Tablas Completas del Distrito con pestañas -->
+            <div class="tab-content" id="pills-tabContent">
+              
+              <!-- PESTAÑA MERITUADOS -->
+              <div class="tab-pane fade show active" id="pills-mer" role="tabpanel">
+                <div class="d-flex align-items-center justify-content-between mb-1 text-muted fs-xs">
+                  <span><i class="bi bi-pencil-square text-primary me-1"></i> <strong>Edición directa:</strong> Haga clic en cualquier celda de texto o puntaje para editarla. La <strong>Columna AB</strong> se recalcula al instante.</span>
+                  <span>Total: <strong id="lbl-total-merituados">0</strong> registros</span>
+                </div>
+                <div class="table-responsive border rounded bg-white shadow-xs table-container-sticky" style="max-height: 480px;">
+                  <table class="table table-sm table-hover table-bordered mb-0 align-middle fs-xs" id="tabla-merituados-completa">
+                    <thead class="table-dark sticky-top text-center">
+                      <tr>
+                        <th style="width: 40px;">#</th>
+                        <th style="width: 100px;">B (List.)</th>
+                        <th style="width: 90px;">C (DNI)</th>
+                        <th>D (Apellido)</th>
+                        <th>E (Nombres)</th>
+                        <th>F (Especialidad)</th>
+                        <th>G (Dist 1)</th>
+                        <th style="width: 45px;">H</th>
+                        <th>I (Dist 2)</th>
+                        <th style="width: 45px;">J</th>
+                        <th>K (Dist 3)</th>
+                        <th style="width: 45px;">L</th>
+                        <th style="width: 45px;">M (FI)</th>
+                        <th style="width: 45px;">N</th>
+                        <th style="width: 45px;">O</th>
+                        <th style="width: 45px;">P</th>
+                        <th style="width: 45px;">Q</th>
+                        <th style="width: 55px;">R (CapDoc)</th>
+                        <th style="width: 55px;">S (CapEsp)</th>
+                        <th style="width: 45px;">T</th>
+                        <th style="width: 45px;">U (Des)</th>
+                        <th style="width: 45px;">V</th>
+                        <th style="width: 55px;">W (AntDoc)</th>
+                        <th style="width: 55px;">X (AntFP)</th>
+                        <th style="width: 45px;">Y</th>
+                        <th style="width: 45px;">Z</th>
+                        <th style="width: 45px;">AA</th>
+                        <th style="width: 70px;" class="table-primary text-primary fw-bold">AB (PUNTAJE)</th>
+                        <th style="width: 50px;">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody id="cuerpo-tabla-merituados">
+                      <!-- Registros de MERITUADOS -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- PESTAÑA NO MERITUADOS -->
+              <div class="tab-pane fade" id="pills-nomer" role="tabpanel">
+                <div class="d-flex align-items-center justify-content-between mb-1 text-muted fs-xs">
+                  <span><i class="bi bi-pencil-square text-danger me-1"></i> <strong>Edición directa:</strong> Haga clic en motivo u observaciones para editarlas directamente.</span>
+                  <span>Total: <strong id="lbl-total-nomerituados">0</strong> registros</span>
+                </div>
+                <div class="table-responsive border rounded bg-white shadow-xs table-container-sticky" style="max-height: 480px;">
+                  <table class="table table-sm table-hover table-bordered mb-0 align-middle fs-xs" id="tabla-nomerituados-completa">
+                    <thead class="table-dark sticky-top text-center">
+                      <tr>
+                        <th style="width: 40px;">#</th>
+                        <th style="width: 90px;">C (DNI)</th>
+                        <th>D (Apellido)</th>
+                        <th>E (Nombres)</th>
+                        <th>F (Especialidad)</th>
+                        <th>G (Dist 1)</th>
+                        <th>H (Dist 2)</th>
+                        <th>I (Dist 3)</th>
+                        <th class="text-danger fw-bold">J (Motivo)</th>
+                        <th>K (Observaciones Comisión)</th>
+                        <th style="width: 50px;">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody id="cuerpo-tabla-nomerituados">
+                      <!-- Registros de NO MERITUADOS -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ====================================================================== -->
+  <!-- MODAL 1: INICIO Y SELECCIÓN DE DISTRITO                                -->
+  <!-- ====================================================================== -->
+  <div class="modal fade" id="modalInicioDistrito" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content shadow-lg border-0">
+        
+        <div class="modal-header bg-header text-white py-3">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-mortarboard-fill fs-4 text-warning"></i>
+            <div>
+              <h5 class="modal-title fw-bold mb-0">Comisión Evaluadora FP – Listados 2027</h5>
+              <small class="text-white-50">Seleccione o cargue la tabulación del distrito para comenzar</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-body p-4">
+          <div class="row g-3">
+            
+            <!-- Opción A: Iniciar Nueva Tabulación -->
+            <div class="col-12">
+              <div class="card h-100 border-primary border-opacity-50 shadow-xs hover-card">
+                <div class="card-body p-3">
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-primary rounded-circle p-2"><i class="bi bi-plus-lg fs-6"></i></span>
+                    <h6 class="fw-bold mb-0 text-primary">Opción A: Iniciar Nueva Tabulación por Distrito</h6>
+                  </div>
+                  <p class="text-muted fs-xs mb-3">Seleccione el Distrito Evaluador para iniciar una planilla vacía (los 7 distritos de la Región 10 se muestran al principio).</p>
+                  
+                  <div class="d-flex gap-2">
+                    <select id="sel-distrito-inicio" class="form-select form-select-sm">
+                      <option value="" disabled selected>-- Seleccione un Distrito Evaluador --</option>
+                    </select>
+                    <button id="btn-confirmar-distrito-nuevo" class="btn btn-primary btn-sm px-4 fw-bold text-nowrap" disabled>
+                      Iniciar <i class="bi bi-chevron-right ms-1"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Opción B: Cargar Tabulación Previa (.xlsx o .json) -->
+            <div class="col-12">
+              <div class="card h-100 border-success border-opacity-50 shadow-xs hover-card">
+                <div class="card-body p-3">
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-success rounded-circle p-2"><i class="bi bi-upload fs-6"></i></span>
+                    <h6 class="fw-bold mb-0 text-success">Opción B: Cargar Tabulación Comenzada en Jornadas Anteriores</h6>
+                  </div>
+                  <p class="text-muted fs-xs mb-3">Suba el archivo <strong>.xlsx</strong> oficial descargado previamente (o un archivo de respaldo <strong>.json</strong>). El sistema leerá el distrito y todas las filas evaluadas.</p>
+                  
+                  <div class="input-group input-group-sm">
+                    <input type="file" id="file-cargar-anterior" class="form-control" accept=".xlsx,.json">
+                    <button id="btn-procesar-archivo-anterior" class="btn btn-success fw-bold px-3" disabled>
+                      <i class="bi bi-box-arrow-in-down me-1"></i> Cargar Archivo
+                    </button>
+                  </div>
+                  <div id="lbl-estado-carga-archivo" class="fs-xs mt-1 text-muted"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Opción C: Retomar sesión guardada en localStorage -->
+            <div class="col-12">
+              <div class="card h-100 border-secondary border-opacity-50 shadow-xs hover-card">
+                <div class="card-body p-3">
+                  <div class="d-flex align-items-center gap-2 mb-2">
+                    <span class="badge bg-secondary rounded-circle p-2"><i class="bi bi-clock-history fs-6"></i></span>
+                    <h6 class="fw-bold mb-0 text-dark">Opción C: Retomar Sesión Guardada en este Navegador</h6>
+                  </div>
+                  <p class="text-muted fs-xs mb-2">Distritos con avance guardado localmente en este equipo:</p>
+                  
+                  <div id="contenedor-distritos-guardados" class="d-flex flex-wrap gap-2">
+                    <span class="text-muted fst-italic fs-xs">No se detectaron tabulaciones guardadas previamente en este navegador.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- MODAL 2: RESUMEN DE LECTURA (ZOOM / MEET)                              -->
+  <!-- ====================================================================== -->
+  <div class="modal fade" id="modalResumenZoom" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-content shadow-lg border-0">
+        <div class="modal-header bg-primary text-white py-2 px-3">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-megaphone-fill fs-5"></i>
+            <h5 class="modal-title fw-bold mb-0 h6">Resumen Oficial de Lectura (Comisión Evaluadora en Zoom/Meet)</h5>
+          </div>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-3">
+          <p class="text-muted fs-xs mb-2">Utilice este formato estandarizado para dictar el veredicto del aspirante ante los demás miembros de la Comisión Evaluadora:</p>
+          <div class="p-3 bg-light border rounded font-monospace fs-xs" id="texto-resumen-zoom" style="white-space: pre-wrap; user-select: all;">
+            <!-- Contenido del resumen -->
+          </div>
+        </div>
+        <div class="modal-footer py-2 px-3">
+          <button id="btn-copiar-resumen-zoom" class="btn btn-outline-primary btn-sm fw-bold">
+            <i class="bi bi-clipboard-check me-1"></i> Copiar al Portapapeles
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- MODAL 3: AGREGAR ESPECIALIDAD NUEVA                                    -->
+  <!-- ====================================================================== -->
+  <div class="modal fade" id="modalNuevoCurso" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content shadow-lg border-0">
+        <div class="modal-header bg-dark text-white py-2 px-3">
+          <div class="d-flex align-items-center gap-2">
+            <i class="bi bi-plus-circle-fill text-warning"></i>
+            <h5 class="modal-title fw-bold mb-0 h6">Agregar Especialidad Nueva al Catálogo</h5>
+          </div>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body p-3">
+          <div class="mb-3">
+            <label class="form-label fs-xs fw-bold">Familia Profesional *</label>
+            <select id="sel-nuevo-curso-familia" class="form-select form-select-sm"></select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fs-xs fw-bold">Código Oficial del Curso * (ej: IM31, AC40, etc.)</label>
+            <input type="text" id="input-nuevo-curso-codigo" class="form-control form-control-sm text-uppercase" placeholder="Ej: IM31">
+          </div>
+          <div class="mb-3">
+            <label class="form-label fs-xs fw-bold">Denominación Oficial de la Especialidad *</label>
+            <input type="text" id="input-nuevo-curso-nombre" class="form-control form-control-sm" placeholder="Ej: Especialista en Ciberseguridad Aplicada">
+          </div>
+          <div id="lbl-error-nuevo-curso" class="text-danger fs-xs mb-0"></div>
+        </div>
+        <div class="modal-footer py-2 px-3">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button id="btn-guardar-nuevo-curso" type="button" class="btn btn-primary btn-sm fw-bold">
+            <i class="bi bi-save me-1"></i> Guardar y Seleccionar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- MODAL 4: CONFIRMAR BORRADO                                             -->
+  <!-- ====================================================================== -->
+  <div class="modal fade" id="modalConfirmarBorrado" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+      <div class="modal-content border-danger shadow">
+        <div class="modal-body text-center p-3">
+          <i class="bi bi-exclamation-triangle-fill text-danger fs-1 mb-2 d-block"></i>
+          <h6 class="fw-bold mb-1">¿Eliminar este registro?</h6>
+          <p class="text-muted fs-xs mb-3" id="txt-confirmar-borrado">Esta acción removerá la fila de la planilla del distrito.</p>
+          <div class="d-flex justify-content-center gap-2">
+            <button type="button" class="btn btn-secondary btn-sm px-3" data-bs-dismiss="modal">Cancelar</button>
+            <button id="btn-confirmar-eliminar-fila" type="button" class="btn btn-danger btn-sm px-3 fw-bold">Eliminar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- SCRIPTS EXTERNOS Y LÓGICA WEB                                          -->
+  <!-- ====================================================================== -->
+  <!-- Bootstrap 5 JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- ExcelJS CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <!-- Catálogo de Datos, Ayudas y Reglas generado desde Python -->
+  <script src="datos.js"></script>
+  <!-- Lógica Integral de la Aplicación -->
+  <script src="app.js"></script>
+</body>
+</html>

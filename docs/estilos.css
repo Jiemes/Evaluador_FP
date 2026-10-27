@@ -1,0 +1,219 @@
+/* ==========================================================================
+   ESTILOS GENERALES - EVALUADOR FP REGION 10 (2027)
+   Aplicación Web Estática Pura para GitHub Pages
+   ========================================================================== */
+
+:root {
+  --color-header: #0d1e32;
+  --color-header-card: #142a42;
+  --color-primary: #1e40af;
+  --color-primary-hover: #1d4ed8;
+  --color-accent: #0284c7;
+  --color-bg-page: #f1f5f9;
+  --color-border: #cbd5e1;
+  --color-live-row: #eff6ff;
+  --color-live-border: #3b82f6;
+  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  font-family: var(--font-main);
+  background-color: var(--color-bg-page);
+  color: #1e293b;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}
+
+/* Tipografías y utilidades */
+.fs-xs {
+  font-size: 0.775rem !important;
+}
+
+.shadow-xs {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.bg-header {
+  background-color: var(--color-header) !important;
+}
+
+.bg-card-header {
+  background-color: var(--color-header-card) !important;
+}
+
+/* Tarjetas */
+.card-seccion {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.hover-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hover-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* Píldoras de pestañas */
+.nav-pills-custom .nav-link {
+  color: #94a3b8;
+  border-radius: 20px;
+  background-color: rgba(255, 255, 255, 0.08);
+  transition: all 0.2s ease;
+}
+
+.nav-pills-custom .nav-link:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+.nav-pills-custom .nav-link.active {
+  color: #ffffff;
+  background-color: var(--color-accent);
+}
+
+/* Fila en vivo */
+.table-live {
+  background-color: var(--color-live-row);
+  border: 2px solid var(--color-live-border) !important;
+}
+
+.table-live td {
+  padding: 0.4rem 0.25rem !important;
+  font-weight: 600;
+}
+
+/* Tablas con cabeceras fijas */
+.table-container-sticky {
+  overflow-y: auto;
+  position: relative;
+}
+
+.table-container-sticky table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.3rem;
+}
+
+/* Celdas interactivas editables al hacer clic */
+.editable-cell {
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.15s ease;
+}
+
+.editable-cell:hover {
+  background-color: #dbeafe !important;
+  outline: 1px dashed #3b82f6;
+}
+
+.editable-cell::after {
+  content: '✎';
+  font-size: 0.65rem;
+  color: #64748b;
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.editable-cell:hover::after {
+  opacity: 1;
+}
+
+.cell-editing {
+  padding: 0 !important;
+  background-color: #ffffff !important;
+}
+
+.cell-editing input,
+.cell-editing select {
+  font-size: 0.775rem;
+  padding: 0.2rem 0.3rem;
+  height: 100%;
+  width: 100%;
+  border: 2px solid var(--color-accent);
+  outline: none;
+  border-radius: 0;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25);
+}
+
+/* Lista de especialidades con checkboxes */
+.especialidades-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.5rem;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  padding: 0.5rem;
+  border-radius: 6px;
+  background-color: #ffffff;
+}
+
+.especialidad-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  cursor: pointer;
+  transition: background-color 0.1s ease;
+}
+
+.especialidad-item:hover {
+  background-color: #e0f2fe;
+  border-color: #7dd3fc;
+}
+
+.especialidad-item input[type="checkbox"] {
+  margin-top: 0.2rem;
+  cursor: pointer;
+}
+
+/* Barra de desplazamiento estética */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Calculadora de cursos en Steps 11 y 12 */
+.calc-curso-item {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+  font-size: 0.8rem;
+}
+
+/* Botones flotantes / badge distrito */
+.badge-distrito {
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+}
